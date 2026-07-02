@@ -52,3 +52,35 @@ Deno.test("blocked attempts do not consume capacity", () => {
   clock.advance(1_001); // only the single successful hit had to expire
   assert(limiter.check("k"));
 });
+
+Deno.test("stale one-off keys are evicted by periodic sweep, bounding memory", () => {
+  const clock = fakeNow();
+  const limiter = new SlidingWindowLimiter(5, 1_000, clock.now);
+
+  // Simulate many distinct one-off clients (e.g. IPs) each checked exactly
+  // once. None of these keys is ever revisited, so nothing but an internal
+  // sweep can ever evict them.
+  for (let i = 0; i < 60; i++) {
+    assert(limiter.check(`one-off-${i}`));
+  }
+  assert(limiter.size === 60);
+
+  // Move well past the window so all 60 recorded hits are expired.
+  clock.advance(10_000);
+
+  // Drive enough additional check() calls to cross the next sweep boundary
+  // (sweeps run every 128 calls; 60 have already happened above). Reuse a
+  // single key so we can distinguish "swept" from "still growing".
+  for (let i = 0; i < 80; i++) {
+    limiter.check("trigger-sweep");
+  }
+
+  // The 60 stale one-off keys must have been dropped by the sweep; only the
+  // repeatedly-checked "trigger-sweep" key (and possibly transient/new
+  // entries) should remain. Memory does not grow unboundedly with the total
+  // number of distinct keys ever seen.
+  assert(
+    limiter.size < 60,
+    `expected stale keys to be swept, but size was ${limiter.size}`,
+  );
+});
