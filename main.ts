@@ -2,6 +2,7 @@ import "@std/dotenv/load";
 import * as esbuild from "esbuild";
 import { denoPlugins } from "@luca/esbuild-deno-loader";
 import { handleConnection } from "./server/signaling-server.ts";
+import { getIceServers } from "./server/ice-config.ts";
 
 const port = Number(Deno.env.get("PORT"));
 
@@ -55,13 +56,23 @@ async function serveFile(filepath: string): Promise<Response> {
   }
 }
 
-Deno.serve({ port }, (req) => {
+const server = Deno.serve({ port }, async (req, info) => {
   const url = new URL(req.url);
 
-  if (req.headers.get("upgrade") === "websocket") {
+  if (url.pathname === "/ws") {
+    if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Expected WebSocket upgrade", { status: 400 });
+    }
     const { socket, response } = Deno.upgradeWebSocket(req);
-    handleConnection(socket);
+    handleConnection(socket, info.remoteAddr.hostname);
     return response;
+  }
+
+  if (url.pathname === "/api/ice-servers") {
+    const config = await getIceServers();
+    return new Response(JSON.stringify(config), {
+      headers: { "content-type": "application/json" },
+    });
   }
 
   if (url.pathname === "/" || url.pathname === "/index.html") {
@@ -73,8 +84,7 @@ Deno.serve({ port }, (req) => {
   return new Response("Not Found", { status: 404 });
 });
 
-console.log(`Server running on http://localhost:${port}`);
-console.log(`WebSocket server running on ws://localhost:${port}`);
+console.log(`listening on port ${server.addr.port}`);
 
 Deno.addSignalListener("SIGINT", () => {
   esbuild.stop();
