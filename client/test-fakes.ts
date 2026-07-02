@@ -5,6 +5,8 @@ import type {
   DataChannelLike,
   PeerConnectionLike,
   TimerApi,
+  Transport,
+  TransportEvent,
   WebSocketLike,
 } from "./webrtc-client.ts";
 import type { ServerMessage } from "../shared/protocol.ts";
@@ -175,4 +177,99 @@ export class FakePeerConnection implements PeerConnectionLike {
   gatherCandidate(candidate: RTCIceCandidateInit): void {
     this.onicecandidate?.({ candidate: { toJSON: () => candidate } });
   }
+}
+
+/**
+ * In-memory Transport for Session unit tests. Two linked instances form a
+ * "DataChannel": sendData on one delivers data-message to the other on a
+ * microtask. Room-level server behavior is driven by the test via emit(),
+ * with auto-acks for createRoom/joinRoom so happy paths stay concise.
+ */
+export class FakeTransport implements Transport {
+  peer: FakeTransport | null = null;
+  calls: string[] = [];
+  sentData: string[] = [];
+  connectError: Error | null = null;
+  /** Events auto-emitted (next microtask) after createRoom is called. */
+  respondToCreate: TransportEvent[] = [{
+    type: "created",
+    peerId: "creator-peer",
+  }];
+  /** Events auto-emitted (next microtask) after joinRoom is called. */
+  respondToJoin: TransportEvent[] = [{
+    type: "joined",
+    peerId: "joiner-peer",
+    participants: ["creator-peer"],
+    graceDurationMs: 120_000,
+  }];
+
+  private open = false;
+  private listeners = new Set<(e: TransportEvent) => void>();
+
+  connect(): Promise<void> {
+    this.calls.push("connect");
+    return this.connectError
+      ? Promise.reject(this.connectError)
+      : Promise.resolve();
+  }
+  createRoom(
+    roomId: string,
+    inviteWindowMs: number,
+    graceDurationMs: number,
+  ): void {
+    this.calls.push(`create:${roomId}:${inviteWindowMs}:${graceDurationMs}`);
+    for (const e of this.respondToCreate) {
+      queueMicrotask(() => this.emit(e));
+    }
+  }
+  joinRoom(roomId: string): void {
+    this.calls.push(`join:${roomId}`);
+    for (const e of this.respondToJoin) {
+      queueMicrotask(() => this.emit(e));
+    }
+  }
+  leaveRoom(): void {
+    this.calls.push("leave");
+  }
+  sendData(data: string): void {
+    if (!this.open) throw new Error("data channel is not open");
+    this.sentData.push(data);
+    const peer = this.peer;
+    if (peer) {
+      queueMicrotask(() => peer.emit({ type: "data-message", data }));
+    }
+  }
+  get dataOpen(): boolean {
+    return this.open;
+  }
+  close(): void {
+    this.calls.push("close");
+    this.open = false;
+  }
+  onEvent(listener: (e: TransportEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  /** Test hook: deliver a transport event (simulating server/DataChannel). */
+  emit(e: TransportEvent): void {
+    if (e.type === "data-open") this.open = true;
+    if (
+      e.type === "data-closed" || e.type === "peer-left" ||
+      e.type === "signaling-lost"
+    ) {
+      this.open = false;
+    }
+    for (const listener of [...this.listeners]) listener(e);
+  }
+}
+
+export function linkTransports(a: FakeTransport, b: FakeTransport): void {
+  a.peer = b;
+  b.peer = a;
+}
+
+/** Simulate the DataChannel opening on both ends. */
+export function openData(a: FakeTransport, b: FakeTransport): void {
+  a.emit({ type: "data-open" });
+  b.emit({ type: "data-open" });
 }
