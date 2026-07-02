@@ -241,7 +241,11 @@ export class Session {
         break;
       case "data-closed":
       case "peer-left":
-        break; // grace handling: Task 7
+        if (this._status === "secure" || this._status === "securing") {
+          this.resetHandshakeState();
+          this.setStatus("reconnecting");
+        }
+        break;
       case "server-error":
         this.handleServerError(e.code);
         break;
@@ -374,18 +378,41 @@ export class Session {
   }
 
   private handlePayload(payload: Payload): void {
-    if (payload.type === "key-confirm") {
-      if (
-        this.expectedTranscriptHash !== "" &&
-        payload.transcriptHash === this.expectedTranscriptHash
-      ) {
-        this.confirmVerified = true;
-        this.becomeSecure();
-      } else {
-        this.failHandshake();
-      }
+    switch (payload.type) {
+      case "key-confirm":
+        if (
+          this.expectedTranscriptHash !== "" &&
+          payload.transcriptHash === this.expectedTranscriptHash
+        ) {
+          this.confirmVerified = true;
+          this.becomeSecure();
+        } else {
+          this.failHandshake();
+        }
+        break;
+      case "identity":
+        if (this.confirmVerified) {
+          this.emit({
+            type: "peer-identity",
+            displayName: payload.displayName,
+          });
+        }
+        break;
+      case "chat":
+        if (this.confirmVerified) {
+          this.emit({
+            type: "chat",
+            text: payload.content,
+            timestamp: this.timers.now(),
+          });
+        }
+        break;
+      case "end":
+        if (this.confirmVerified) {
+          this.finish("peer-ended");
+        }
+        break;
     }
-    // chat / identity / end payloads: Task 6
   }
 
   private becomeSecure(): void {
@@ -395,6 +422,20 @@ export class Session {
     }
     this.setStatus("secure");
     this.emit({ type: "secure", safetyCode: this.safetyCode });
+    // Identity travels encrypted, and only after key-confirm verifies (spec §7.4).
+    const displayName = this.opts.displayName;
+    const key = this.sessionKey;
+    if (displayName && key) {
+      void encryptPayload(key, { type: "identity", displayName })
+        .then((frame) => {
+          if (this._status === "secure" && this.transport.dataOpen) {
+            this.transport.sendData(JSON.stringify(frame));
+          }
+        })
+        .catch(() => {
+          // best effort
+        });
+    }
   }
 
   private failHandshake(reason: EndReason = "key-confirm-failed"): void {

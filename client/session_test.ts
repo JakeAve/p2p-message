@@ -333,3 +333,62 @@ Deno.test("enc frames arriving before the peer pubkey are buffered, then process
   session.end();
   await flushAsync();
 });
+
+Deno.test("chat flows both directions once secure", async () => {
+  const pair = await makeSecurePair();
+  const chatAtB = waitForEvent(pair.b, "chat");
+  await pair.a.sendChat("hello from Ann 🎉");
+  const gotB = await chatAtB;
+  assertEquals(gotB.text, "hello from Ann 🎉");
+  assertEquals(typeof gotB.timestamp, "number");
+  const chatAtA = waitForEvent(pair.a, "chat");
+  await pair.b.sendChat("hi Ann");
+  assertEquals((await chatAtA).text, "hi Ann");
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("display names travel encrypted after key-confirm and emit peer-identity", async () => {
+  const pair = await makeStartedPair();
+  const identityAtA = waitForEvent(pair.a, "peer-identity");
+  const identityAtB = waitForEvent(pair.b, "peer-identity");
+  openData(pair.ta, pair.tb);
+  assertEquals((await identityAtA).displayName, "Bob");
+  assertEquals((await identityAtB).displayName, "Ann");
+  // nothing plaintext except the two pubkey frames ever crossed the channel
+  for (const raw of [...pair.ta.sentData, ...pair.tb.sentData]) {
+    const frame = JSON.parse(raw) as { type: string };
+    assert(frame.type === "pubkey" || frame.type === "enc");
+  }
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("end(): ender sees you-ended, peer receives the end payload and sees peer-ended", async () => {
+  const pair = await makeSecurePair();
+  const eventsA = collect(pair.a);
+  const endedB = waitForEvent(pair.b, "ended");
+  pair.a.end();
+  assertEquals(pair.a.status, "ended");
+  assert(eventsA.some((e) => e.type === "ended" && e.reason === "you-ended"));
+  assertEquals((await endedB).reason, "peer-ended");
+  await flushAsync();
+  assert(pair.ta.calls.includes("leave"));
+});
+
+Deno.test("void behavior: sendChat during reconnecting throws and nothing is buffered", async () => {
+  const pair = await makeSecurePair();
+  const sentBefore = pair.ta.sentData.length;
+  pair.ta.emit({ type: "peer-left", peerId: "joiner-peer" });
+  await flushAsync();
+  await assertRejects(
+    () => pair.a.sendChat("into the void"),
+    SendUnavailableError,
+  );
+  assertEquals(pair.ta.sentData.length, sentBefore); // not sent, not queued — anywhere
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
