@@ -1,3 +1,9 @@
+import {
+  type EncryptedFrame,
+  type Payload,
+  WIRE_VERSION,
+} from "../shared/wire.ts";
+
 export function generateFragmentSecret(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(32));
 }
@@ -153,4 +159,37 @@ export function unpadPlaintext(padded: Uint8Array): Uint8Array {
     throw new Error("padding delimiter not found");
   }
   return padded.slice(0, delimiterIndex);
+}
+
+export async function encryptPayload(
+  key: CryptoKey,
+  payload: Payload,
+): Promise<EncryptedFrame> {
+  const plaintext = new TextEncoder().encode(JSON.stringify(payload));
+  const padded = padPlaintext(plaintext);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: iv as BufferSource },
+    key,
+    padded as BufferSource,
+  );
+  return {
+    v: WIRE_VERSION,
+    type: "enc",
+    iv: bytesToBase64url(iv),
+    ct: bytesToBase64url(new Uint8Array(ciphertext)),
+  };
+}
+
+export async function decryptPayload(
+  key: CryptoKey,
+  frame: EncryptedFrame,
+): Promise<Payload> {
+  const padded = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64urlToBytes(frame.iv) as BufferSource },
+    key,
+    base64urlToBytes(frame.ct) as BufferSource,
+  );
+  const plaintext = unpadPlaintext(new Uint8Array(padded));
+  return JSON.parse(new TextDecoder().decode(plaintext)) as Payload;
 }

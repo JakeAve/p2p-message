@@ -8,10 +8,12 @@ import {
 import {
   base64urlToBytes,
   bytesToBase64url,
+  decryptPayload,
   derivePathToken,
   deriveSafetyCode,
   deriveSessionKey,
   deriveSharedSecret,
+  encryptPayload,
   exportPublicKeyRaw,
   generateEcdhKeyPair,
   generateFragmentSecret,
@@ -20,6 +22,7 @@ import {
   transcriptHash,
   unpadPlaintext,
 } from "./crypto.ts";
+import { parseFrame, type Payload } from "../shared/wire.ts";
 
 Deno.test("generateFragmentSecret returns 32 bytes, fresh each call", () => {
   const a = generateFragmentSecret();
@@ -261,4 +264,107 @@ Deno.test("pad → unpad round-trips at bucket edges", () => {
 
 Deno.test("unpadPlaintext throws when the delimiter is missing", () => {
   assertThrows(() => unpadPlaintext(new Uint8Array(256).fill(0x01)), Error);
+});
+
+/** Fragment + fully-derived session keys for both sides of a handshake. */
+async function securedPair(): Promise<{
+  fragment: Uint8Array;
+  keyA: CryptoKey;
+  keyB: CryptoKey;
+  secretA: ArrayBuffer;
+}> {
+  const fragment = generateFragmentSecret();
+  const { secretA, secretB } = await handshake();
+  return {
+    fragment,
+    keyA: await deriveSessionKey(fragment, secretA),
+    keyB: await deriveSessionKey(fragment, secretB),
+    secretA,
+  };
+}
+
+Deno.test("encryptPayload → decryptPayload round-trips every payload type", async () => {
+  const { keyA, keyB } = await securedPair();
+  const payloads: Payload[] = [
+    { type: "key-confirm", transcriptHash: "c29tZWhhc2g" },
+    { type: "identity", displayName: "Ada 🔐" },
+    { type: "chat", content: "the code to the safe is 4512" },
+    { type: "end" },
+  ];
+  for (const payload of payloads) {
+    const frame = await encryptPayload(keyA, payload);
+    assertEquals(frame.v, 1);
+    assertEquals(frame.type, "enc");
+    assertEquals(await decryptPayload(keyB, frame), payload);
+  }
+});
+
+Deno.test("encryptPayload emits a parseFrame-valid frame with fresh IVs", async () => {
+  const { keyA } = await securedPair();
+  const payload: Payload = { type: "chat", content: "hello" };
+  const f1 = await encryptPayload(keyA, payload);
+  const f2 = await encryptPayload(keyA, payload);
+  assertEquals(parseFrame(JSON.stringify(f1)), f1);
+  assertEquals(base64urlToBytes(f1.iv).length, 12);
+  assertNotEquals(f1.iv, f2.iv); // fresh random IV per message
+  assertNotEquals(f1.ct, f2.ct);
+});
+
+Deno.test("decryptPayload rejects tampered ciphertext with OperationError", async () => {
+  const { keyA, keyB } = await securedPair();
+  const frame = await encryptPayload(keyA, { type: "chat", content: "hi" });
+  const ctBytes = base64urlToBytes(frame.ct);
+  ctBytes[0] ^= 0xff; // flip bits in the first ciphertext byte
+  const tampered = { ...frame, ct: bytesToBase64url(ctBytes) };
+  const err = await assertRejects(
+    () => decryptPayload(keyB, tampered),
+    DOMException,
+  );
+  assertEquals(err.name, "OperationError");
+});
+
+Deno.test("decryptPayload rejects a wrong IV with OperationError", async () => {
+  const { keyA, keyB } = await securedPair();
+  const frame = await encryptPayload(keyA, { type: "chat", content: "hi" });
+  const wrongIv = {
+    ...frame,
+    iv: bytesToBase64url(crypto.getRandomValues(new Uint8Array(12))),
+  };
+  const err = await assertRejects(
+    () => decryptPayload(keyB, wrongIv),
+    DOMException,
+  );
+  assertEquals(err.name, "OperationError");
+});
+
+Deno.test("fragment binding: wrong fragment secret cannot decrypt", async () => {
+  // Spec §7.1: an interloper with the correct ECDH exchange but the wrong
+  // fragment secret derives a different session key — decryption must fail
+  // loudly (OperationError), never yield garbage.
+  const { keyA, secretA } = await securedPair();
+  const intruderKey = await deriveSessionKey(generateFragmentSecret(), secretA);
+  const frame = await encryptPayload(keyA, {
+    type: "chat",
+    content: "ssn is 078-05-1120",
+  });
+  const err = await assertRejects(
+    () => decryptPayload(intruderKey, frame),
+    DOMException,
+  );
+  assertEquals(err.name, "OperationError");
+});
+
+Deno.test("encryptPayload propagates RangeError for oversized payloads", async () => {
+  const { keyA } = await securedPair();
+  const oversized: Payload = { type: "chat", content: "x".repeat(4200) };
+  await assertRejects(() => encryptPayload(keyA, oversized), RangeError);
+});
+
+Deno.test("a 4000-byte chat message fits the largest bucket", async () => {
+  // Spec §7.2: composer caps text at 4,000 UTF-8 bytes; the 96-byte margin
+  // absorbs the JSON envelope overhead.
+  const { keyA, keyB } = await securedPair();
+  const payload: Payload = { type: "chat", content: "m".repeat(4000) };
+  const frame = await encryptPayload(keyA, payload);
+  assertEquals(await decryptPayload(keyB, frame), payload);
 });
