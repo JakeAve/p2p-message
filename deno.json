@@ -3,7 +3,12 @@
     "lib": ["dom", "es2020", "deno.ns"]
   },
   "tasks": {
-    "dev": "deno run --allow-net --allow-read=/ --allow-env --allow-run --watch=server/,client/,main.ts,index.html main.ts"
+    "dev": "deno run --allow-net --allow-read=/ --allow-env --allow-run --watch=server/,client/,main.ts,index.html main.ts",
+    "setup": "git config core.hooksPath .githooks && chmod +x .githooks/pre-commit .githooks/pre-push",
+    "check": "deno fmt --check . && deno lint . && deno check",
+    "test": "deno test -A --permit-no-files",
+    "pre-commit": "deno task check && deno task test",
+    "pre-push": "deno task check && deno task test"
   },
   "imports": {
     "@luca/esbuild-deno-loader": "jsr:@luca/esbuild-deno-loader@^0.11.1",
