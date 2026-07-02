@@ -130,3 +130,27 @@ export async function transcriptHash(
   );
   return bytesToBase64url(new Uint8Array(digest));
 }
+
+const PADDING_BUCKETS = [256, 512, 1024, 2048, 4096];
+
+export function padPlaintext(bytes: Uint8Array): Uint8Array {
+  const needed = bytes.length + 1; // content + 0x00 delimiter
+  const bucket = PADDING_BUCKETS.find((size) => size >= needed);
+  if (bucket === undefined) {
+    throw new RangeError(
+      `plaintext of ${bytes.length} bytes exceeds the largest padding bucket`,
+    );
+  }
+  const padded = new Uint8Array(bucket).fill(0x01);
+  padded.set(bytes);
+  padded[bytes.length] = 0x00;
+  return padded;
+}
+
+export function unpadPlaintext(padded: Uint8Array): Uint8Array {
+  const delimiterIndex = padded.indexOf(0x00);
+  if (delimiterIndex === -1) {
+    throw new Error("padding delimiter not found");
+  }
+  return padded.slice(0, delimiterIndex);
+}

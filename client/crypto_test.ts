@@ -16,7 +16,9 @@ import {
   generateEcdhKeyPair,
   generateFragmentSecret,
   importPublicKeyRaw,
+  padPlaintext,
   transcriptHash,
+  unpadPlaintext,
 } from "./crypto.ts";
 
 Deno.test("generateFragmentSecret returns 32 bytes, fresh each call", () => {
@@ -210,4 +212,53 @@ Deno.test("transcriptHash: base64url shape, distinct for distinct keys", async (
   const h2 = await transcriptHash("keyOne", "keyThree");
   assertMatch(h1, /^[A-Za-z0-9_-]{43}$/); // 32 hash bytes → 43 chars
   assertNotEquals(h1, h2);
+});
+
+Deno.test("padPlaintext pads to the smallest bucket ≥ len+1", () => {
+  const cases: Array<[number, number]> = [
+    [0, 256],
+    [1, 256],
+    [255, 256], // 255 + 1 delimiter fills 256 exactly
+    [256, 512], // one over the edge
+    [511, 512],
+    [512, 1024],
+    [1023, 1024],
+    [1024, 2048],
+    [2047, 2048],
+    [2048, 4096],
+    [4095, 4096], // largest payload that fits
+  ];
+  for (const [len, bucket] of cases) {
+    assertEquals(padPlaintext(new Uint8Array(len).fill(0x41)).length, bucket);
+  }
+});
+
+Deno.test("padPlaintext throws RangeError beyond the largest bucket", () => {
+  assertThrows(() => padPlaintext(new Uint8Array(4096)), RangeError);
+  assertThrows(() => padPlaintext(new Uint8Array(10_000)), RangeError);
+});
+
+Deno.test("padPlaintext layout: content, 0x00 delimiter, 0x01 fill", () => {
+  const padded = padPlaintext(new Uint8Array([0x41, 0x42]));
+  assertEquals(padded.length, 256);
+  assertEquals(padded[0], 0x41);
+  assertEquals(padded[1], 0x42);
+  assertEquals(padded[2], 0x00);
+  for (let i = 3; i < padded.length; i++) {
+    assertEquals(padded[i], 0x01);
+  }
+});
+
+Deno.test("pad → unpad round-trips at bucket edges", () => {
+  for (const len of [0, 1, 2, 255, 256, 1000, 2048, 4095]) {
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = (i % 255) + 1; // any non-zero pattern
+    }
+    assertEquals(unpadPlaintext(padPlaintext(bytes)), bytes);
+  }
+});
+
+Deno.test("unpadPlaintext throws when the delimiter is missing", () => {
+  assertThrows(() => unpadPlaintext(new Uint8Array(256).fill(0x01)), Error);
 });
