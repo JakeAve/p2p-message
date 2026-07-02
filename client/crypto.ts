@@ -4,7 +4,7 @@ import {
   WIRE_VERSION,
 } from "../shared/wire.ts";
 
-export function generateFragmentSecret(): Uint8Array {
+export function generateFragmentSecret(): Uint8Array<ArrayBuffer> {
   return crypto.getRandomValues(new Uint8Array(32));
 }
 
@@ -19,7 +19,7 @@ export function bytesToBase64url(bytes: Uint8Array): string {
     .replace(/=+$/, "");
 }
 
-export function base64urlToBytes(s: string): Uint8Array {
+export function base64urlToBytes(s: string): Uint8Array<ArrayBuffer> {
   if (!/^[A-Za-z0-9_-]*$/.test(s)) {
     throw new TypeError("invalid base64url string");
   }
@@ -37,12 +37,9 @@ export function base64urlToBytes(s: string): Uint8Array {
 }
 
 export async function derivePathToken(
-  fragmentSecret: Uint8Array,
+  fragmentSecret: Uint8Array<ArrayBuffer>,
 ): Promise<string> {
-  const hash = await crypto.subtle.digest(
-    "SHA-256",
-    fragmentSecret as BufferSource,
-  );
+  const hash = await crypto.subtle.digest("SHA-256", fragmentSecret);
   return bytesToBase64url(new Uint8Array(hash, 0, 16));
 }
 
@@ -62,7 +59,7 @@ export async function exportPublicKeyRaw(key: CryptoKey): Promise<string> {
 export function importPublicKeyRaw(b64: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     "raw",
-    base64urlToBytes(b64) as BufferSource,
+    base64urlToBytes(b64),
     { name: "ECDH", namedCurve: "P-256" },
     true,
     [],
@@ -88,7 +85,7 @@ function importHkdfIkm(ikm: ArrayBuffer): Promise<CryptoKey> {
 }
 
 export async function deriveSessionKey(
-  fragmentSecret: Uint8Array,
+  fragmentSecret: Uint8Array<ArrayBuffer>,
   sharedSecret: ArrayBuffer,
 ): Promise<CryptoKey> {
   const ikm = await importHkdfIkm(sharedSecret);
@@ -96,7 +93,7 @@ export async function deriveSessionKey(
     {
       name: "HKDF",
       hash: "SHA-256",
-      salt: fragmentSecret as BufferSource,
+      salt: fragmentSecret,
       info: new TextEncoder().encode("p2p-msg/session-key/v1"),
     },
     ikm,
@@ -107,7 +104,7 @@ export async function deriveSessionKey(
 }
 
 export async function deriveSafetyCode(
-  fragmentSecret: Uint8Array,
+  fragmentSecret: Uint8Array<ArrayBuffer>,
   sharedSecret: ArrayBuffer,
 ): Promise<string> {
   const ikm = await importHkdfIkm(sharedSecret);
@@ -115,7 +112,7 @@ export async function deriveSafetyCode(
     {
       name: "HKDF",
       hash: "SHA-256",
-      salt: fragmentSecret as BufferSource,
+      salt: fragmentSecret,
       info: new TextEncoder().encode("p2p-msg/safety-code/v1"),
     },
     ikm,
@@ -139,7 +136,7 @@ export async function transcriptHash(
 
 const PADDING_BUCKETS = [256, 512, 1024, 2048, 4096];
 
-export function padPlaintext(bytes: Uint8Array): Uint8Array {
+export function padPlaintext(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   const needed = bytes.length + 1; // content + 0x00 delimiter
   const bucket = PADDING_BUCKETS.find((size) => size >= needed);
   if (bucket === undefined) {
@@ -169,9 +166,9 @@ export async function encryptPayload(
   const padded = padPlaintext(plaintext);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: iv as BufferSource },
+    { name: "AES-GCM", iv },
     key,
-    padded as BufferSource,
+    padded,
   );
   return {
     v: WIRE_VERSION,
@@ -186,9 +183,9 @@ export async function decryptPayload(
   frame: EncryptedFrame,
 ): Promise<Payload> {
   const padded = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: base64urlToBytes(frame.iv) as BufferSource },
+    { name: "AES-GCM", iv: base64urlToBytes(frame.iv) },
     key,
-    base64urlToBytes(frame.ct) as BufferSource,
+    base64urlToBytes(frame.ct),
   );
   const plaintext = unpadPlaintext(new Uint8Array(padded));
   return JSON.parse(new TextDecoder().decode(plaintext)) as Payload;
