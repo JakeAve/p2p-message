@@ -302,12 +302,18 @@ export class WebRTCTransport implements Transport {
           participants: msg.participants,
           graceDurationMs: msg.graceDurationMs,
         });
+        // Spec §5 convention: the newly-joined peer initiates the offer
+        // to every peer already in the room (capacity 2 → at most one).
+        for (const peerId of msg.participants) {
+          void this.initiateOffer(peerId);
+        }
         break;
       case "peer-joined":
         this.emit({ type: "peer-joined", peerId: msg.peerId });
         break;
       case "signal":
-        break; // WebRTC choreography lands in the next commit
+        void this.handleSignal(msg.from, msg.payload);
+        break;
       case "peer-left":
         this.teardownPeer();
         this.emit({ type: "peer-left", peerId: msg.peerId });
@@ -321,6 +327,77 @@ export class WebRTCTransport implements Transport {
       case "pong":
         break;
     }
+  }
+
+  private async initiateOffer(peerId: string): Promise<void> {
+    const pc = this.newPeerConnection(peerId);
+    const channel = pc.createDataChannel("data", { ordered: true });
+    this.attachDataChannel(channel);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    this.sendSignal(peerId, { kind: "offer", sdp: offer });
+  }
+
+  private async handleSignal(from: string, payload: unknown): Promise<void> {
+    const p = payload as SignalPayload;
+    if (p.kind === "offer") {
+      const pc = this.newPeerConnection(from);
+      await pc.setRemoteDescription(p.sdp);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      this.sendSignal(from, { kind: "answer", sdp: answer });
+    } else if (p.kind === "answer") {
+      await this.pc?.setRemoteDescription(p.sdp);
+    } else if (p.kind === "ice") {
+      await this.pc?.addIceCandidate(p.candidate);
+    }
+  }
+
+  private newPeerConnection(peerId: string): PeerConnectionLike {
+    this.teardownPeer();
+    const pc = this.createPeerConnection({ iceServers: this.iceServers });
+    this.pc = pc;
+    pc.onicecandidate = (ev) => {
+      if (ev.candidate) {
+        this.sendSignal(peerId, {
+          kind: "ice",
+          candidate: ev.candidate.toJSON(),
+        });
+      }
+    };
+    pc.ondatachannel = (ev) => this.attachDataChannel(ev.channel);
+    pc.onconnectionstatechange = () => {
+      if (
+        pc.connectionState === "failed" || pc.connectionState === "disconnected"
+      ) {
+        this.handleDataClosed();
+      }
+    };
+    return pc;
+  }
+
+  private attachDataChannel(channel: DataChannelLike): void {
+    this.channel = channel;
+    channel.onopen = () => {
+      this.channelOpen = true;
+      this.emit({ type: "data-open" });
+    };
+    channel.onmessage = (ev) => {
+      this.emit({ type: "data-message", data: String(ev.data) });
+    };
+    channel.onclose = () => this.handleDataClosed();
+  }
+
+  private handleDataClosed(): void {
+    const wasOpen = this.channelOpen;
+    this.teardownPeer();
+    if (wasOpen) {
+      this.emit({ type: "data-closed" });
+    }
+  }
+
+  private sendSignal(to: string, payload: SignalPayload): void {
+    this.sendEnvelope({ type: "signal", roomId: this.roomId, to, payload });
   }
 
   private teardownPeer(): void {

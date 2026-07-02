@@ -1,7 +1,12 @@
 // client/test-fakes.ts
 // Test-only fakes for the injectable seams. Not a test file itself
 // (the name intentionally does not match Deno's *_test.ts glob).
-import type { TimerApi, WebSocketLike } from "./webrtc-client.ts";
+import type {
+  DataChannelLike,
+  PeerConnectionLike,
+  TimerApi,
+  WebSocketLike,
+} from "./webrtc-client.ts";
 import type { ServerMessage } from "../shared/protocol.ts";
 
 /** Deterministic TimerApi driven by tick(); starts at t=0. */
@@ -97,5 +102,77 @@ export class FakeWebSocket implements WebSocketLike {
   /** Parsed sent envelopes, for assertions. */
   sentJson(): unknown[] {
     return this.sent.map((s) => JSON.parse(s));
+  }
+}
+
+export class FakeDataChannel implements DataChannelLike {
+  readyState = "connecting";
+  sent: string[] = [];
+  onopen: (() => void) | null = null;
+  onmessage: ((ev: { data: unknown }) => void) | null = null;
+  onclose: (() => void) | null = null;
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  close(): void {
+    this.readyState = "closed";
+    this.onclose?.();
+  }
+  /** Test hook: the channel finished opening. */
+  open(): void {
+    this.readyState = "open";
+    this.onopen?.();
+  }
+  /** Test hook: a frame arrived from the peer. */
+  receive(data: string): void {
+    this.onmessage?.({ data });
+  }
+}
+
+export class FakePeerConnection implements PeerConnectionLike {
+  localDescription: RTCSessionDescriptionInit | null = null;
+  remoteDescription: RTCSessionDescriptionInit | null = null;
+  connectionState = "new";
+  channels: FakeDataChannel[] = [];
+  addedCandidates: RTCIceCandidateInit[] = [];
+  closed = false;
+  onicecandidate:
+    | ((ev: { candidate: { toJSON(): RTCIceCandidateInit } | null }) => void)
+    | null = null;
+  ondatachannel: ((ev: { channel: DataChannelLike }) => void) | null = null;
+  onconnectionstatechange: (() => void) | null = null;
+
+  constructor(public config: RTCConfiguration) {}
+
+  createDataChannel(_label: string): DataChannelLike {
+    const ch = new FakeDataChannel();
+    this.channels.push(ch);
+    return ch;
+  }
+  createOffer(): Promise<RTCSessionDescriptionInit> {
+    return Promise.resolve({ type: "offer", sdp: "fake-offer-sdp" });
+  }
+  createAnswer(): Promise<RTCSessionDescriptionInit> {
+    return Promise.resolve({ type: "answer", sdp: "fake-answer-sdp" });
+  }
+  setLocalDescription(desc: RTCSessionDescriptionInit): Promise<void> {
+    this.localDescription = desc;
+    return Promise.resolve();
+  }
+  setRemoteDescription(desc: RTCSessionDescriptionInit): Promise<void> {
+    this.remoteDescription = desc;
+    return Promise.resolve();
+  }
+  addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
+    this.addedCandidates.push(candidate);
+    return Promise.resolve();
+  }
+  close(): void {
+    this.closed = true;
+  }
+  /** Test hook: an ICE candidate was gathered locally. */
+  gatherCandidate(candidate: RTCIceCandidateInit): void {
+    this.onicecandidate?.({ candidate: { toJSON: () => candidate } });
   }
 }

@@ -5,7 +5,12 @@ import {
   type TransportEvent,
   WebRTCTransport,
 } from "./webrtc-client.ts";
-import { FakeWebSocket, flushAsync, ManualTimers } from "./test-fakes.ts";
+import {
+  FakePeerConnection,
+  FakeWebSocket,
+  flushAsync,
+  ManualTimers,
+} from "./test-fakes.ts";
 import { PING_INTERVAL_MS } from "../shared/protocol.ts";
 
 function makeHarness() {
@@ -150,4 +155,166 @@ Deno.test("flushAsync drains queued microtasks", async () => {
   });
   await flushAsync();
   assert(ran);
+});
+
+function makeRtcHarness() {
+  const sockets: FakeWebSocket[] = [];
+  const pcs: FakePeerConnection[] = [];
+  const timers = new ManualTimers();
+  const events: TransportEvent[] = [];
+  const transport = new WebRTCTransport("ws://example.test/ws", {
+    createWebSocket: (url) => {
+      const s = new FakeWebSocket(url);
+      sockets.push(s);
+      return s;
+    },
+    createPeerConnection: (config) => {
+      const pc = new FakePeerConnection(config);
+      pcs.push(pc);
+      return pc;
+    },
+    fetchIceServers: () =>
+      Promise.resolve([{ urls: "stun:stun.example.test:3478" }]),
+    timers,
+  });
+  transport.onEvent((e) => events.push(e));
+  return { transport, sockets, pcs, timers, events };
+}
+
+async function joinedRtcHarness() {
+  const h = makeRtcHarness();
+  const p = h.transport.connect();
+  h.sockets[0].open();
+  await p;
+  h.transport.joinRoom("room-token-1");
+  h.sockets[0].receive({
+    type: "joined",
+    peerId: "me",
+    participants: ["creator-peer"],
+    graceDurationMs: 120_000,
+  });
+  await flushAsync();
+  return h;
+}
+
+Deno.test("newly-joined peer initiates: joined with participants → offer signal", async () => {
+  const h = await joinedRtcHarness();
+  // a peer connection was created with the fetched ICE config
+  assertEquals(h.pcs.length, 1);
+  assertEquals(h.pcs[0].config.iceServers, [
+    { urls: "stun:stun.example.test:3478" },
+  ]);
+  // the initiator opens the DataChannel
+  assertEquals(h.pcs[0].channels.length, 1);
+  // and an offer rides an opaque signal envelope addressed to the existing peer
+  const signals = h.sockets[0].sentJson().filter(
+    (m) => (m as { type: string }).type === "signal",
+  ) as Array<{ type: string; roomId: string; to: string; payload: unknown }>;
+  assertEquals(signals.length, 1);
+  assertEquals(signals[0].roomId, "room-token-1");
+  assertEquals(signals[0].to, "creator-peer");
+  assertEquals(signals[0].payload, {
+    kind: "offer",
+    sdp: { type: "offer", sdp: "fake-offer-sdp" },
+  });
+});
+
+Deno.test("existing peer answers an incoming offer (does not initiate)", async () => {
+  const h = makeRtcHarness();
+  const p = h.transport.connect();
+  h.sockets[0].open();
+  await p;
+  h.transport.createRoom("room-token-1", 600_000, 120_000);
+  h.sockets[0].receive({ type: "created", peerId: "me" });
+  h.sockets[0].receive({ type: "peer-joined", peerId: "joiner-peer" });
+  await flushAsync();
+  assertEquals(h.pcs.length, 0); // waits for the joiner's offer
+  h.sockets[0].receive({
+    type: "signal",
+    from: "joiner-peer",
+    payload: { kind: "offer", sdp: { type: "offer", sdp: "their-offer" } },
+  });
+  await flushAsync();
+  assertEquals(h.pcs.length, 1);
+  assertEquals(h.pcs[0].remoteDescription, {
+    type: "offer",
+    sdp: "their-offer",
+  });
+  const signals = h.sockets[0].sentJson().filter(
+    (m) => (m as { type: string }).type === "signal",
+  ) as Array<{ to: string; payload: unknown }>;
+  assertEquals(signals.length, 1);
+  assertEquals(signals[0].to, "joiner-peer");
+  assertEquals(signals[0].payload, {
+    kind: "answer",
+    sdp: { type: "answer", sdp: "fake-answer-sdp" },
+  });
+});
+
+Deno.test("answer and ICE signals are applied to the open peer connection", async () => {
+  const h = await joinedRtcHarness();
+  h.sockets[0].receive({
+    type: "signal",
+    from: "creator-peer",
+    payload: { kind: "answer", sdp: { type: "answer", sdp: "their-answer" } },
+  });
+  h.sockets[0].receive({
+    type: "signal",
+    from: "creator-peer",
+    payload: { kind: "ice", candidate: { candidate: "cand-1" } },
+  });
+  await flushAsync();
+  assertEquals(h.pcs[0].remoteDescription, {
+    type: "answer",
+    sdp: "their-answer",
+  });
+  assertEquals(h.pcs[0].addedCandidates, [{ candidate: "cand-1" }]);
+});
+
+Deno.test("locally gathered ICE candidates are sent as signal envelopes", async () => {
+  const h = await joinedRtcHarness();
+  h.pcs[0].gatherCandidate({ candidate: "local-cand" });
+  const signals = h.sockets[0].sentJson().filter(
+    (m) => (m as { type: string }).type === "signal",
+  ) as Array<{ payload: { kind: string } }>;
+  assertEquals(signals[signals.length - 1].payload, {
+    kind: "ice",
+    candidate: { candidate: "local-cand" },
+  } as unknown as { kind: string });
+});
+
+Deno.test("DataChannel lifecycle → data-open / data-message / data-closed + sendData", async () => {
+  const h = await joinedRtcHarness();
+  const channel = h.pcs[0].channels[0];
+  channel.open();
+  assertEquals(h.transport.dataOpen, true);
+  h.transport.sendData("hello-frame");
+  assertEquals(channel.sent, ["hello-frame"]);
+  channel.receive("reply-frame");
+  channel.close();
+  assertEquals(h.transport.dataOpen, false);
+  const dataEvents = h.events.filter((e) => e.type.startsWith("data-"));
+  assertEquals(dataEvents, [
+    { type: "data-open" },
+    { type: "data-message", data: "reply-frame" },
+    { type: "data-closed" },
+  ]);
+});
+
+Deno.test("peer-left tears down the peer connection and channel", async () => {
+  const h = await joinedRtcHarness();
+  h.pcs[0].channels[0].open();
+  h.sockets[0].receive({ type: "peer-left", peerId: "creator-peer" });
+  assertEquals(h.pcs[0].closed, true);
+  assertEquals(h.transport.dataOpen, false);
+  assert(h.events.some((e) => e.type === "peer-left"));
+});
+
+Deno.test("connectionState failed closes the channel path (data-closed)", async () => {
+  const h = await joinedRtcHarness();
+  h.pcs[0].channels[0].open();
+  h.pcs[0].connectionState = "failed";
+  h.pcs[0].onconnectionstatechange?.();
+  assertEquals(h.transport.dataOpen, false);
+  assert(h.events.some((e) => e.type === "data-closed"));
 });
