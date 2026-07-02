@@ -73,3 +73,60 @@ export function deriveSharedSecret(
     256,
   );
 }
+
+function importHkdfIkm(ikm: ArrayBuffer): Promise<CryptoKey> {
+  return crypto.subtle.importKey("raw", ikm, "HKDF", false, [
+    "deriveKey",
+    "deriveBits",
+  ]);
+}
+
+export async function deriveSessionKey(
+  fragmentSecret: Uint8Array,
+  sharedSecret: ArrayBuffer,
+): Promise<CryptoKey> {
+  const ikm = await importHkdfIkm(sharedSecret);
+  return await crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: fragmentSecret as BufferSource,
+      info: new TextEncoder().encode("p2p-msg/session-key/v1"),
+    },
+    ikm,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+export async function deriveSafetyCode(
+  fragmentSecret: Uint8Array,
+  sharedSecret: ArrayBuffer,
+): Promise<string> {
+  const ikm = await importHkdfIkm(sharedSecret);
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: fragmentSecret as BufferSource,
+      info: new TextEncoder().encode("p2p-msg/safety-code/v1"),
+    },
+    ikm,
+    32,
+  );
+  const value = new DataView(bits).getUint32(0, false);
+  return String(value % 1_000_000).padStart(6, "0");
+}
+
+export async function transcriptHash(
+  pubKeyA: string,
+  pubKeyB: string,
+): Promise<string> {
+  const [lo, hi] = [...[pubKeyA, pubKeyB]].sort();
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${lo}|${hi}`),
+  );
+  return bytesToBase64url(new Uint8Array(digest));
+}

@@ -9,11 +9,14 @@ import {
   base64urlToBytes,
   bytesToBase64url,
   derivePathToken,
+  deriveSafetyCode,
+  deriveSessionKey,
   deriveSharedSecret,
   exportPublicKeyRaw,
   generateEcdhKeyPair,
   generateFragmentSecret,
   importPublicKeyRaw,
+  transcriptHash,
 } from "./crypto.ts";
 
 Deno.test("generateFragmentSecret returns 32 bytes, fresh each call", () => {
@@ -122,4 +125,89 @@ Deno.test("different keypairs derive different shared secrets", async () => {
   const ab = await deriveSharedSecret(alice.privateKey, bob.publicKey);
   const am = await deriveSharedSecret(alice.privateKey, mallory.publicKey);
   assertNotEquals(new Uint8Array(ab), new Uint8Array(am));
+});
+
+/** Run a two-sided ECDH handshake; returns each side's shared secret. */
+async function handshake(): Promise<{
+  secretA: ArrayBuffer;
+  secretB: ArrayBuffer;
+}> {
+  const a = await generateEcdhKeyPair();
+  const b = await generateEcdhKeyPair();
+  return {
+    secretA: await deriveSharedSecret(a.privateKey, b.publicKey),
+    secretB: await deriveSharedSecret(b.privateKey, a.publicKey),
+  };
+}
+
+Deno.test("deriveSessionKey returns a non-extractable AES-GCM-256 key", async () => {
+  const { secretA } = await handshake();
+  const key = await deriveSessionKey(generateFragmentSecret(), secretA);
+  assertEquals(key.type, "secret");
+  assertEquals(key.extractable, false);
+  assertEquals([...key.usages].sort(), ["decrypt", "encrypt"]);
+  const alg = key.algorithm as AesKeyAlgorithm;
+  assertEquals(alg.name, "AES-GCM");
+  assertEquals(alg.length, 256);
+});
+
+Deno.test("deriveSessionKey: both sides derive the same key", async () => {
+  const fragment = generateFragmentSecret();
+  const { secretA, secretB } = await handshake();
+  const keyA = await deriveSessionKey(fragment, secretA);
+  const keyB = await deriveSessionKey(fragment, secretB);
+  // The keys are non-extractable, so prove equality by encrypting the same
+  // plaintext under the same IV with each. Fixed IV is a TEST-ONLY probe —
+  // production code must never reuse an IV.
+  const iv = new Uint8Array(12);
+  const msg = new TextEncoder().encode("probe");
+  const ctA = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, keyA, msg);
+  const ctB = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, keyB, msg);
+  assertEquals(new Uint8Array(ctA), new Uint8Array(ctB));
+});
+
+Deno.test("deriveSafetyCode: same inputs → same code on both sides", async () => {
+  const fragment = generateFragmentSecret();
+  const { secretA, secretB } = await handshake();
+  const codeA = await deriveSafetyCode(fragment, secretA);
+  const codeB = await deriveSafetyCode(fragment, secretB);
+  assertEquals(codeA, codeB);
+});
+
+Deno.test("deriveSafetyCode: different fragment secret → different code", async () => {
+  // Fragment-binding property (spec §7.1): a party holding the path token
+  // but not the fragment derives a different code than the intended peer.
+  const { secretA } = await handshake();
+  const codeReal = await deriveSafetyCode(generateFragmentSecret(), secretA);
+  const codeIntruder = await deriveSafetyCode(
+    generateFragmentSecret(),
+    secretA,
+  );
+  assertNotEquals(codeReal, codeIntruder);
+});
+
+Deno.test("deriveSafetyCode is always exactly 6 decimal digits", async () => {
+  // Property over many random inputs: shape is /^\d{6}$/ and derivation is
+  // deterministic. ~50 trials makes a leading-zero code (10% chance each)
+  // overwhelmingly likely to be exercised, covering padStart.
+  for (let i = 0; i < 50; i++) {
+    const fragment = generateFragmentSecret();
+    const secret = crypto.getRandomValues(new Uint8Array(32)).buffer;
+    const code = await deriveSafetyCode(fragment, secret);
+    assertMatch(code, /^\d{6}$/);
+    assertEquals(await deriveSafetyCode(fragment, secret), code);
+  }
+});
+
+Deno.test("transcriptHash is order-independent", async () => {
+  const a = "AAAApubkeyOfPeerA";
+  const b = "ZZZZpubkeyOfPeerB";
+  assertEquals(await transcriptHash(a, b), await transcriptHash(b, a));
+});
+
+Deno.test("transcriptHash: base64url shape, distinct for distinct keys", async () => {
+  const h1 = await transcriptHash("keyOne", "keyTwo");
+  const h2 = await transcriptHash("keyOne", "keyThree");
+  assertMatch(h1, /^[A-Za-z0-9_-]{43}$/); // 32 hash bytes → 43 chars
+  assertNotEquals(h1, h2);
 });
