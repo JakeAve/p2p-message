@@ -39,3 +39,37 @@ export async function derivePathToken(
   );
   return bytesToBase64url(new Uint8Array(hash, 0, 16));
 }
+
+export function generateEcdhKeyPair(): Promise<CryptoKeyPair> {
+  return crypto.subtle.generateKey(
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    ["deriveBits"],
+  );
+}
+
+export async function exportPublicKeyRaw(key: CryptoKey): Promise<string> {
+  const raw = await crypto.subtle.exportKey("raw", key);
+  return bytesToBase64url(new Uint8Array(raw));
+}
+
+export function importPublicKeyRaw(b64: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    "raw",
+    base64urlToBytes(b64) as BufferSource,
+    { name: "ECDH", namedCurve: "P-256" },
+    true,
+    [],
+  );
+}
+
+export function deriveSharedSecret(
+  privateKey: CryptoKey,
+  peerPublicKey: CryptoKey,
+): Promise<ArrayBuffer> {
+  return crypto.subtle.deriveBits(
+    { name: "ECDH", public: peerPublicKey },
+    privateKey,
+    256,
+  );
+}
