@@ -1,7 +1,26 @@
 // client/session.ts
 // The single API the UI talks to (contract C5). Wraps signaling + WebRTC
 // (via the Transport interface) + crypto into a status-driven state machine.
-import { derivePathToken, encryptPayload } from "./crypto.ts";
+import {
+  decryptPayload,
+  derivePathToken,
+  deriveSafetyCode,
+  deriveSessionKey,
+  deriveSharedSecret,
+  encryptPayload,
+  exportPublicKeyRaw,
+  generateEcdhKeyPair,
+  importPublicKeyRaw,
+  transcriptHash,
+} from "./crypto.ts";
+import {
+  type EncryptedFrame,
+  type Frame,
+  parseFrame,
+  type Payload,
+  WIRE_VERSION,
+  WireError,
+} from "../shared/wire.ts";
 import type { ErrorCode } from "../shared/protocol.ts";
 import {
   realTimers,
@@ -84,7 +103,16 @@ export class Session {
   /** Serialized event queue: one handler finishes before the next starts. */
   private rx: Promise<void> = Promise.resolve();
 
+  // Handshake state — fully reset on every (re)key by resetHandshakeState().
   private sessionKey: CryptoKey | null = null;
+  private keyPair: CryptoKeyPair | null = null;
+  private myPubB64 = "";
+  private safetyCode = "";
+  private expectedTranscriptHash = "";
+  private confirmVerified = false;
+  /** Inbound-only reorder buffer (spec §5): enc frames pre-key-derivation. */
+  private preKeyBuffer: EncryptedFrame[] = [];
+  private confirmTimer: number | null = null;
 
   constructor(opts: SessionOptions, deps: SessionDeps = {}) {
     this.opts = opts;
@@ -191,7 +219,7 @@ export class Session {
     this.startAck = null;
   }
 
-  private handleEvent(e: TransportEvent): void {
+  private async handleEvent(e: TransportEvent): Promise<void> {
     if (this._status === "ended") return;
     switch (e.type) {
       case "created":
@@ -206,9 +234,11 @@ export class Session {
         break; // status changes when the DataChannel opens
       case "data-open":
         this.setStatus("securing");
+        await this.beginHandshake();
         break;
       case "data-message":
-        break; // handshake handling: Task 5
+        await this.handleRaw(e.data);
+        break;
       case "data-closed":
       case "peer-left":
         break; // grace handling: Task 7
@@ -241,9 +271,145 @@ export class Session {
     this.finish(reason);
   }
 
+  /** Spec §7.1: fresh ephemeral ECDH keys on every DataChannel open (first connect and every rekey). */
+  private async beginHandshake(): Promise<void> {
+    this.resetHandshakeState();
+    this.keyPair = await generateEcdhKeyPair();
+    this.myPubB64 = await exportPublicKeyRaw(this.keyPair.publicKey);
+    this.transport.sendData(
+      JSON.stringify({ v: WIRE_VERSION, type: "pubkey", key: this.myPubB64 }),
+    );
+    this.confirmTimer = this.timers.setTimeout(
+      () => this.failHandshake(),
+      KEY_CONFIRM_TIMEOUT_MS,
+    );
+  }
+
+  private resetHandshakeState(): void {
+    if (this.confirmTimer !== null) {
+      this.timers.clearTimeout(this.confirmTimer);
+      this.confirmTimer = null;
+    }
+    this.sessionKey = null;
+    this.keyPair = null;
+    this.myPubB64 = "";
+    this.safetyCode = "";
+    this.expectedTranscriptHash = "";
+    this.confirmVerified = false;
+    this.preKeyBuffer = [];
+  }
+
+  private async handleRaw(raw: string): Promise<void> {
+    let frame: Frame;
+    try {
+      frame = parseFrame(raw);
+    } catch (err) {
+      if (err instanceof WireError && err.code === "bad-version") {
+        // Unknown wire version is a version-mismatch at any stage (spec §7.4)
+        this.failHandshake("version-mismatch");
+        return;
+      }
+      if (!this.confirmVerified) this.failHandshake();
+      // post-confirm: ignore malformed frames rather than killing a live chat
+      return;
+    }
+    if (frame.type === "pubkey") {
+      await this.handlePeerPubkey(frame.key);
+      return;
+    }
+    if (!this.sessionKey) {
+      // The allowed inbound exception (spec §5): hold frames that raced ahead
+      // of key derivation; processed in order right after the key exists.
+      this.preKeyBuffer.push(frame);
+      return;
+    }
+    await this.handleEncrypted(frame);
+  }
+
+  private async handlePeerPubkey(peerPubB64: string): Promise<void> {
+    if (!this.keyPair || this.sessionKey) return; // out-of-phase or duplicate pubkey
+    try {
+      const peerKey = await importPublicKeyRaw(peerPubB64);
+      const shared = await deriveSharedSecret(this.keyPair.privateKey, peerKey);
+      this.sessionKey = await deriveSessionKey(
+        this.opts.fragmentSecret,
+        shared,
+      );
+      this.safetyCode = await deriveSafetyCode(
+        this.opts.fragmentSecret,
+        shared,
+      );
+      this.expectedTranscriptHash = await transcriptHash(
+        this.myPubB64,
+        peerPubB64,
+      );
+      const confirm = await encryptPayload(this.sessionKey, {
+        type: "key-confirm",
+        transcriptHash: this.expectedTranscriptHash,
+      });
+      this.transport.sendData(JSON.stringify(confirm));
+    } catch {
+      this.failHandshake();
+      return;
+    }
+    const buffered = this.preKeyBuffer;
+    this.preKeyBuffer = [];
+    for (const frame of buffered) {
+      await this.handleEncrypted(frame);
+    }
+  }
+
+  private async handleEncrypted(frame: EncryptedFrame): Promise<void> {
+    if (!this.sessionKey) return;
+    let payload: Payload;
+    try {
+      payload = await decryptPayload(this.sessionKey, frame);
+    } catch {
+      // Wrong key (fragment mismatch) or corrupt frame. Pre-confirm this is
+      // the loud failure the spec requires; post-confirm we ignore it.
+      if (!this.confirmVerified) this.failHandshake();
+      return;
+    }
+    this.handlePayload(payload);
+  }
+
+  private handlePayload(payload: Payload): void {
+    if (payload.type === "key-confirm") {
+      if (
+        this.expectedTranscriptHash !== "" &&
+        payload.transcriptHash === this.expectedTranscriptHash
+      ) {
+        this.confirmVerified = true;
+        this.becomeSecure();
+      } else {
+        this.failHandshake();
+      }
+    }
+    // chat / identity / end payloads: Task 6
+  }
+
+  private becomeSecure(): void {
+    if (this.confirmTimer !== null) {
+      this.timers.clearTimeout(this.confirmTimer);
+      this.confirmTimer = null;
+    }
+    this.setStatus("secure");
+    this.emit({ type: "secure", safetyCode: this.safetyCode });
+  }
+
+  private failHandshake(reason: EndReason = "key-confirm-failed"): void {
+    if (this._status === "ended") return;
+    try {
+      this.transport.leaveRoom();
+    } catch {
+      // best effort
+    }
+    this.finish(reason);
+  }
+
   private finish(reason: EndReason, closeTransport = true): void {
     if (this._status === "ended") return;
-    this.sessionKey = null;
+    this.resetHandshakeState();
     const pendingAck = this.startAck;
     this.startAck = null;
     this.setStatus("ended");
