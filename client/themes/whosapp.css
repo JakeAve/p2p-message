@@ -1,0 +1,156 @@
+/*
+ * whosapp theme — WhatsApp parody. Light mode is the first theme with
+ * dark text on sent bubbles (--sent-text carries it). Light/dark follow
+ * the system.
+ */
+:root[data-theme="whosapp"] {
+  --bg: #ece5dd; /* classic chat-wallpaper beige */
+  --surface: #ffffff;
+  --surface-alt: #f0f2f5;
+  --text: #111b21;
+  --muted: #54656f;
+  --border: #d1d7db;
+  --accent: #008069; /* WhatsApp teal */
+  --accent-hover: #017561;
+  --accent-contrast: #ffffff;
+  --sent: #dcf8c6; /* classic green bubble */
+  --sent-text: #111b21; /* dark text on the pale green */
+  --danger: #b42318;
+  --ok: #008069;
+  --warn: #8a6d00;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(11, 20, 26, 0.1);
+  --font-body:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="whosapp"] {
+    --bg: #0b141a;
+    --surface: #1f2c34;
+    --surface-alt: #202c33;
+    --text: #e9edef;
+    --muted: #8696a0;
+    --border: #2f3b43;
+    --accent: #00a884;
+    --accent-hover: #06cf9c;
+    --sent: #005c4b;
+    --sent-text: #e9edef;
+    --danger: #f15c6d;
+    --ok: #00a884;
+    --warn: #d9a53f;
+    --shadow: none;
+  }
+}
+
+/* Faint doodle-style wallpaper dots on the message area. */
+[data-theme="whosapp"] .messages {
+  background-image: radial-gradient(
+    rgba(11, 20, 26, 0.05) 1.5px,
+    transparent 1.5px
+  );
+  background-size: 22px 22px;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-theme="whosapp"] .messages {
+    background-image: radial-gradient(
+      rgba(233, 237, 239, 0.04) 1.5px,
+      transparent 1.5px
+    );
+  }
+}
+
+/* Tighter WhatsApp bubble radius with a crisp tail-side corner. */
+[data-theme="whosapp"] .msg {
+  border-radius: 8px;
+  box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+}
+
+[data-theme="whosapp"] .msg.sent {
+  border-bottom-right-radius: 2px;
+}
+
+[data-theme="whosapp"] .msg.received {
+  background: var(--surface);
+  border: none;
+  border-bottom-left-radius: 2px;
+}
+
+[data-theme="whosapp"] .msg.system {
+  box-shadow: none;
+}
+
+/* Teal chat header, WhatsApp's signature. */
+[data-theme="whosapp"] .chat-header {
+  background: #008069;
+  color: #ffffff;
+  border-bottom: none;
+}
+
+[data-theme="whosapp"] .chat-header .safety-hint,
+[data-theme="whosapp"] .chat-header .peer-name {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* Solid pill fills — the default low-opacity tints vanish on teal. */
+[data-theme="whosapp"] .chat-header .status-pill {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+/* The base .btn-quiet/.btn-primary colors (--muted / --accent) are
+ * illegible or shapeless against the teal header — give them explicit
+ * light-mode treatments here. */
+[data-theme="whosapp"] .chat-header .btn-quiet {
+  color: rgba(255, 255, 255, 0.9);
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+[data-theme="whosapp"] .chat-header .btn-quiet:hover:not(:disabled) {
+  color: #ffffff;
+  border-color: #ffffff;
+}
+
+[data-theme="whosapp"] .chat-header .btn-primary {
+  border: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-theme="whosapp"] .chat-header {
+    background: #202c33;
+    color: #e9edef;
+  }
+
+  [data-theme="whosapp"] .chat-header .safety-hint,
+  [data-theme="whosapp"] .chat-header .peer-name {
+    color: #8696a0;
+  }
+
+  [data-theme="whosapp"] .chat-header .status-pill {
+    background: rgba(11, 20, 26, 0.6);
+  }
+
+  /* Dark header (#202c33) is already legible with the base button
+   * colors — restore them since the light-mode overrides above aren't
+   * scoped to a media query. */
+  [data-theme="whosapp"] .chat-header .btn-quiet {
+    color: var(--muted);
+    border-color: var(--border);
+  }
+
+  [data-theme="whosapp"] .chat-header .btn-quiet:hover:not(:disabled) {
+    color: var(--danger);
+    border-color: var(--danger);
+  }
+
+  [data-theme="whosapp"] .chat-header .btn-primary {
+    border: 1px solid transparent;
+  }
+}

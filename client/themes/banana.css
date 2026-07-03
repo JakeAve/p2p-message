@@ -1,0 +1,81 @@
+/*
+ * banana theme — iMessage parody. Light/dark follow the system: the dark
+ * media block re-overrides tokens on the same :root[data-theme] selector
+ * (specificity 0,2,0) later in the cascade, so it wins in dark mode.
+ */
+:root[data-theme="banana"] {
+  --bg: #f2f2f7; /* iOS grouped background */
+  --surface: #ffffff;
+  --surface-alt: #f2f2f7;
+  --text: #000000;
+  --muted: #6c6c72;
+  --border: #d1d1d6;
+  --accent: #007aff; /* iMessage blue */
+  --accent-hover: #0066d6;
+  --accent-contrast: #ffffff;
+  --sent: #007aff;
+  --sent-text: #ffffff;
+  --danger: #d70015;
+  --ok: #1d8a3a;
+  --warn: #a05e03;
+  --radius: 16px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --font-body:
+    -apple-system,
+    BlinkMacSystemFont,
+    "SF Pro Text",
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="banana"] {
+    --bg: #000000; /* true-black iOS dark */
+    --surface: #1c1c1e;
+    --surface-alt: #2c2c2e;
+    --text: #ffffff;
+    --muted: #98989f;
+    --border: #38383a;
+    --accent: #0a84ff;
+    --accent-hover: #409cff;
+    --sent: #0a84ff;
+    --danger: #ff453a;
+    --ok: #30d158;
+    --warn: #ffd60a;
+    --shadow: none;
+  }
+}
+
+/* Extra-round iMessage bubbles. */
+[data-theme="banana"] .msg {
+  border-radius: 18px;
+}
+
+[data-theme="banana"] .msg.sent {
+  border-bottom-right-radius: 4px;
+}
+
+[data-theme="banana"] .msg.received {
+  background: #e9e9eb; /* iMessage gray bubble */
+  border-color: #e9e9eb;
+  border-bottom-left-radius: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-theme="banana"] .msg.received {
+    background: #26262a;
+    border-color: #26262a;
+  }
+}
+
+/* Pill-shaped composer field and buttons, like the iMessage text box. */
+[data-theme="banana"] .composer textarea {
+  border-radius: 22px;
+  padding: 10px 16px;
+}
+
+[data-theme="banana"] .btn {
+  border-radius: 999px;
+}
