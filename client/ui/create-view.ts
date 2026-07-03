@@ -79,6 +79,7 @@ export function renderCreateView(
 
   const createBtn = el("button", "btn btn-primary");
   createBtn.textContent = "Create secure link";
+  createBtn.dataset.e2e = "create";
   createBtn.addEventListener("click", () => {
     const invite = card.querySelector<HTMLInputElement>(
       'input[name="invite"]:checked',

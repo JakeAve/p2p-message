@@ -10,6 +10,8 @@
     "jsr:@std/path@1": "1.1.4",
     "jsr:@std/path@^1.0.6": "1.1.4",
     "npm:esbuild@0.20.2": "0.20.2",
+    "npm:playwright@*": "1.61.1",
+    "npm:playwright@^1.49.0": "1.61.1",
     "npm:qrcode-generator@^1.4.4": "1.5.2"
   },
   "jsr": {
@@ -192,6 +194,25 @@
       "scripts": true,
       "bin": true
     },
+    "fsevents@2.3.2": {
+      "integrity": "sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==",
+      "os": ["darwin"],
+      "scripts": true
+    },
+    "playwright-core@1.61.1": {
+      "integrity": "sha512-h7Qlt6m4REp25qvIdvbDtVmD4LqVXfpRxhORv9L0jzETM05p4fuPJ3dKyuSXQxDSbXnmS79HAgi9589lGSpLkg==",
+      "bin": true
+    },
+    "playwright@1.61.1": {
+      "integrity": "sha512-DWnY5o3YbLWK4GovuAVwpqL+1VwGNdUGrRr++8j8PtQQzvAVZUIMjKQ90fY689sEJZJBbZVw1rXaOKSTitkzPQ==",
+      "dependencies": [
+        "playwright-core"
+      ],
+      "optionalDependencies": [
+        "fsevents"
+      ],
+      "bin": true
+    },
     "qrcode-generator@1.5.2": {
       "integrity": "sha512-pItrW0Z9HnDBnFmgiNrY1uxRdri32Uh9EjNYLPVC2zZ3ZRIIEqBoDgm4DkvDwNNDHTK7FNkmr8zAa77BYc9xNw=="
     }
@@ -203,6 +224,7 @@
       "jsr:@std/dotenv@~0.225.6",
       "jsr:@std/path@1",
       "npm:esbuild@0.20.2",
+      "npm:playwright@^1.49.0",
       "npm:qrcode-generator@^1.4.4"
     ]
   }

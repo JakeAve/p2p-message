@@ -4,6 +4,7 @@ import {
   MAX_MESSAGE_BYTES,
   utf8ByteLength,
 } from "./format.ts";
+import type { SessionStatus } from "../session.ts";
 
 export interface ChatMessage {
   text: string;
@@ -21,6 +22,8 @@ export interface ChatViewController {
   setSafetyCode(code: string): void;
   setPeerName(name: string): void;
   setStatus(status: ChatStatus): void;
+  /** Test hook only: reflects C5's raw SessionStatus as `data-status`. */
+  setStatusAttr(status: SessionStatus): void;
   setComposerEnabled(enabled: boolean): void;
   destroy(): void;
 }
@@ -41,6 +44,7 @@ export function renderChatView(
   const header = el("div", "chat-header");
   const safety = el("div", "safety");
   const safetyCode = el("div", "safety-code");
+  safetyCode.dataset.e2e = "safety-code";
   safetyCode.textContent = "· · · · · ·"; // no code until first key-confirm
   const safetyHint = el("p", "safety-hint");
   safetyHint.textContent =
@@ -51,17 +55,26 @@ export function renderChatView(
   const right = el("div", "chat-header-right");
   const peerName = el("span", "peer-name");
   const statusPill = el("span", "status-pill connecting");
+  statusPill.dataset.e2e = "status";
   statusPill.textContent = "Connecting…";
+
+  // End chat: in-page confirm step (native confirm()/alert() can't be
+  // dismissed by headless automation, and are poor UX anyway).
   const endBtn = el("button", "btn btn-quiet");
   endBtn.textContent = "End chat";
+  endBtn.dataset.e2e = "end-chat";
+  const endConfirmBtn = el("button", "btn btn-primary");
+  endConfirmBtn.textContent = "Confirm end chat?";
+  endConfirmBtn.dataset.e2e = "end-confirm";
+  endConfirmBtn.hidden = true;
   endBtn.addEventListener("click", () => {
-    if (
-      confirm("End this chat? The conversation will be gone for both of you.")
-    ) {
-      handlers.onEnd();
-    }
+    endBtn.hidden = true;
+    endConfirmBtn.hidden = false;
   });
-  right.append(peerName, statusPill, endBtn);
+  endConfirmBtn.addEventListener("click", () => {
+    handlers.onEnd();
+  });
+  right.append(peerName, statusPill, endBtn, endConfirmBtn);
   header.append(safety, right);
 
   // Message list — memory/DOM only, never persisted anywhere.
@@ -76,8 +89,10 @@ export function renderChatView(
   const textarea = el("textarea");
   textarea.placeholder = "Type a message…";
   textarea.rows = 1;
+  textarea.dataset.e2e = "composer";
   const sendBtn = el("button", "btn btn-primary");
   sendBtn.textContent = "Send";
+  sendBtn.dataset.e2e = "send";
   row.append(textarea, sendBtn);
   const meta = el("div", "composer-meta");
   const counter = el("span", "counter");
@@ -120,6 +135,7 @@ export function renderChatView(
   return {
     addMessage(msg) {
       const bubble = el("div", `msg ${msg.direction}`);
+      bubble.dataset.e2e = "message";
       bubble.textContent = msg.text;
       messages.append(bubble);
       scrollToEnd();
@@ -149,6 +165,9 @@ export function renderChatView(
       } else {
         statusPill.textContent = "Connecting…";
       }
+    },
+    setStatusAttr(status) {
+      statusPill.dataset.status = status;
     },
     setComposerEnabled(enabled) {
       composerEnabled = enabled;

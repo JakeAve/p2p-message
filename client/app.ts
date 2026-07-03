@@ -48,6 +48,8 @@ function runSession(
     },
     onEnd: () => session.end(),
   });
+  // Test hook only: initial data-status, before the first C5 status event.
+  chat.setStatusAttr(session.status);
 
   // Creator: share overlay on top of the (empty) chat until the peer joins.
   let shareView: ShareView | null = share ? renderShareView(root, share) : null;
@@ -56,6 +58,7 @@ function runSession(
   session.on((event) => {
     switch (event.type) {
       case "status":
+        chat.setStatusAttr(event.status);
         if (
           shareView &&
           (event.status === "securing" || event.status === "secure")
@@ -101,7 +104,9 @@ function runSession(
         shareView?.destroy();
         shareView = null;
         chat.destroy();
-        renderScreen(root, screenForEndReason(event.reason));
+        renderScreen(root, screenForEndReason(event.reason), {
+          testHook: "ended-screen",
+        });
         break;
     }
   });
