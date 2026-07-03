@@ -1,5 +1,9 @@
-import { assertEquals } from "@std/assert";
-import { SECURITY_HEADERS, withSecurityHeaders } from "./static.ts";
+import { assert, assertEquals } from "@std/assert";
+import {
+  handleStaticRequest,
+  SECURITY_HEADERS,
+  withSecurityHeaders,
+} from "./static.ts";
 
 Deno.test("SECURITY_HEADERS carries the three pinned headers exactly (C6)", () => {
   assertEquals(
@@ -24,4 +28,37 @@ Deno.test("withSecurityHeaders adds all three and preserves existing headers", a
     assertEquals(res.headers.get(name), value);
   }
   assertEquals(await res.text(), "hi");
+});
+
+Deno.test("GET /themes/90s.css serves the theme stylesheet as text/css", async () => {
+  const res = await handleStaticRequest(
+    new Request("http://localhost/themes/90s.css"),
+  );
+  assert(res !== null);
+  assertEquals(res.status, 200);
+  assertEquals(res.headers.get("content-type"), "text/css; charset=utf-8");
+  await res.body?.cancel();
+});
+
+Deno.test("unknown theme names and malformed theme paths are not served", async () => {
+  for (
+    const path of [
+      "/themes/nope.css",
+      "/themes/90s.CSS",
+      "/themes/90s",
+      "/themes/.css",
+      "/themes/a/b.css",
+      "/themes/..%2Fstyles.css",
+      // Note: "/themes/%2e%2e/styles.css" is intentionally omitted — the
+      // WHATWG URL parser normalizes it to "/styles.css" before this
+      // handler ever sees `pathname`, so it hits the styles route (a real
+      // 200 response) rather than the theme route. Confirmed empirically;
+      // see task-3-report.md.
+    ]
+  ) {
+    const res = await handleStaticRequest(
+      new Request(`http://localhost${path}`),
+    );
+    assertEquals(res, null, path);
+  }
 });

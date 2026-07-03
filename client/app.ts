@@ -19,6 +19,8 @@ import {
   NOT_FOUND_SCREEN,
   screenForEndReason,
 } from "./ui/screens.ts";
+import { initTheme } from "./ui/themes.ts";
+import { renderThemePicker } from "./ui/theme-picker.ts";
 
 const root = document.getElementById("app") as HTMLElement;
 const signalingUrl = `${
@@ -152,6 +154,8 @@ async function startJoiner(pathToken: string, fragment: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  initTheme();
+  renderThemePicker(document.body);
   const route = parseRoute(location.pathname, location.hash);
   switch (route.view) {
     case "create":

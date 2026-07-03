@@ -6,3 +6,4 @@ docs/*
 .superpowers
 .claude/worktrees/*
 dist/
+.playwright-mcp/
