@@ -6,6 +6,7 @@ Deno.test("registry has unique ids, includes default and 90s, labels everything"
   assertEquals(new Set(ids).size, ids.length);
   assert(ids.includes("default"));
   assert(ids.includes("90s"));
+  assert(ids.includes("banana"));
   assert(THEMES.some((t) => t.id === DEFAULT_THEME_ID));
   for (const t of THEMES) assert(t.label.length > 0);
 });

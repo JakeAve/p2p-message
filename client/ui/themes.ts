@@ -8,6 +8,7 @@ export interface ThemeOption {
 export const THEMES: readonly ThemeOption[] = [
   { id: "default", label: "Default" },
   { id: "90s", label: "90s" },
+  { id: "banana", label: "Banana" },
 ];
 
 export const DEFAULT_THEME_ID = "default";
