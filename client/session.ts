@@ -170,6 +170,14 @@ export class Session {
       type: "chat",
       content: text,
     });
+    // Re-check: the peer may have disconnected while we were encrypting.
+    // Without this, transport.sendData would throw its own generic Error
+    // instead of the documented SendUnavailableError.
+    if (
+      this._status !== "secure" || !this.sessionKey || !this.transport.dataOpen
+    ) {
+      throw new SendUnavailableError();
+    }
     this.transport.sendData(JSON.stringify(frame));
   }
 

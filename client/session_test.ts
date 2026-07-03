@@ -136,12 +136,14 @@ Deno.test("start() may only be called once", async () => {
   await assertRejects(() => session.start());
 });
 
-Deno.test("join errors map to EndReasons: room-not-found / room-full / rate-limited", async () => {
+Deno.test("join errors map to EndReasons: room-not-found / room-full / room-exists / rate-limited / config-invalid", async () => {
   for (
     const [code, reason] of [
       ["room-not-found", "room-not-found"],
       ["room-full", "room-full"],
+      ["room-exists", "room-full"],
       ["rate-limited", "rate-limited"],
+      ["config-invalid", "signaling-lost"],
     ] as const
   ) {
     const transport = new FakeTransport();
@@ -395,6 +397,22 @@ Deno.test("void behavior: sendChat during reconnecting throws and nothing is buf
     SendUnavailableError,
   );
   assertEquals(pair.ta.sentData.length, sentBefore); // not sent, not queued — anywhere
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("sendChat rejects with SendUnavailableError if peer disconnects mid-encrypt", async () => {
+  const pair = await makeSecurePair();
+  const sentBefore = pair.ta.sentData.length;
+  // Start the send but don't await it yet: encryptPayload's real WebCrypto
+  // call yields the event loop, giving the peer-left event (delivered via
+  // the FakeTransport's synchronous listener + Session's microtask queue)
+  // a chance to flip status away from "secure" before sendData would run.
+  const sendPromise = pair.a.sendChat("into the void");
+  pair.ta.emit({ type: "peer-left", peerId: "joiner-peer" });
+  await assertRejects(() => sendPromise, SendUnavailableError);
+  assertEquals(pair.ta.sentData.length, sentBefore); // not sent
   pair.a.end();
   pair.b.end();
   await flushAsync();

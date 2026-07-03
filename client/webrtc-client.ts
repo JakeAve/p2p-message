@@ -304,15 +304,22 @@ export class WebRTCTransport implements Transport {
         });
         // Spec §5 convention: the newly-joined peer initiates the offer
         // to every peer already in the room (capacity 2 → at most one).
+        // Real-browser RTCPeerConnection rejection behavior here is unverified
+        // by unit tests (FakePeerConnection's methods never reject); exercise
+        // via the browser e2e plan (docs/todo/05-e2e-docs.md), not here.
         for (const peerId of msg.participants) {
-          void this.initiateOffer(peerId);
+          void this.initiateOffer(peerId).catch(() =>
+            this.emit({ type: "signaling-lost" })
+          );
         }
         break;
       case "peer-joined":
         this.emit({ type: "peer-joined", peerId: msg.peerId });
         break;
       case "signal":
-        void this.handleSignal(msg.from, msg.payload);
+        void this.handleSignal(msg.from, msg.payload).catch(() =>
+          this.emit({ type: "signaling-lost" })
+        );
         break;
       case "peer-left":
         this.teardownPeer();
@@ -339,6 +346,14 @@ export class WebRTCTransport implements Transport {
   }
 
   private async handleSignal(from: string, payload: unknown): Promise<void> {
+    // Defense-in-depth only (both ends are this same client): drop anything
+    // that isn't a recognizable signal shape instead of throwing on it.
+    if (
+      typeof payload !== "object" || payload === null ||
+      typeof (payload as { kind?: unknown }).kind !== "string"
+    ) {
+      return;
+    }
     const p = payload as SignalPayload;
     if (p.kind === "offer") {
       const pc = this.newPeerConnection(from);
