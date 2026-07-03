@@ -2,9 +2,18 @@
 
 const repoRoot = new URL("../", import.meta.url);
 
+/**
+ * CSP hash of the inline theme-boot script in index.html — the only inline
+ * script allowed. static_test.ts recomputes it from index.html, so editing
+ * the script without updating this constant fails tests, not production.
+ */
+export const THEME_BOOT_SCRIPT_HASH =
+  "sha256-Ec3VgLi2mQwC+v6WgZdc/4KZ8ndNqGKkbw3vVkFLtOY=";
+
 export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "content-security-policy":
-    "default-src 'self'; script-src 'self'; style-src 'self'; " +
+    `default-src 'self'; script-src 'self' '${THEME_BOOT_SCRIPT_HASH}'; ` +
+    "style-src 'self'; " +
     "connect-src 'self' ws: wss:; img-src 'self' data:; frame-ancestors 'none'",
   "referrer-policy": "no-referrer",
   "x-content-type-options": "nosniff",

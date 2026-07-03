@@ -2,17 +2,37 @@ import { assert, assertEquals } from "@std/assert";
 import {
   handleStaticRequest,
   SECURITY_HEADERS,
+  THEME_BOOT_SCRIPT_HASH,
   withSecurityHeaders,
 } from "./static.ts";
 
 Deno.test("SECURITY_HEADERS carries the three pinned headers exactly (C6)", () => {
   assertEquals(
     SECURITY_HEADERS["content-security-policy"],
-    "default-src 'self'; script-src 'self'; style-src 'self'; " +
+    `default-src 'self'; script-src 'self' '${THEME_BOOT_SCRIPT_HASH}'; ` +
+      "style-src 'self'; " +
       "connect-src 'self' ws: wss:; img-src 'self' data:; frame-ancestors 'none'",
   );
   assertEquals(SECURITY_HEADERS["referrer-policy"], "no-referrer");
   assertEquals(SECURITY_HEADERS["x-content-type-options"], "nosniff");
+});
+
+Deno.test("THEME_BOOT_SCRIPT_HASH matches the inline script in index.html", async () => {
+  const html = await Deno.readTextFile(
+    new URL("../index.html", import.meta.url),
+  );
+  const inline = /<script>([\s\S]*?)<\/script>/.exec(html);
+  assert(inline, "index.html has no bare inline <script> (theme boot)");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(inline[1]),
+  );
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(digest)));
+  assertEquals(
+    THEME_BOOT_SCRIPT_HASH,
+    `sha256-${b64}`,
+    "inline theme-boot script changed — update THEME_BOOT_SCRIPT_HASH in static.ts",
+  );
 });
 
 Deno.test("withSecurityHeaders adds all three and preserves existing headers", async () => {

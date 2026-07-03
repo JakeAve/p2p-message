@@ -59,8 +59,7 @@ function tokenBlock(css: string, id: string): string {
   return css.slice(open + 1, close);
 }
 
-Deno.test("every non-default theme has a CSS file, an index.html link, and a full token override", async () => {
-  const indexHtml = await Deno.readTextFile(new URL("index.html", repoRoot));
+Deno.test("every non-default theme has a CSS file and a full token override", async () => {
   for (const theme of THEMES) {
     if (theme.id === DEFAULT_THEME_ID) continue;
     const cssUrl = new URL(`client/themes/${theme.id}.css`, repoRoot);
@@ -70,12 +69,6 @@ Deno.test("every non-default theme has a CSS file, an index.html link, and a ful
     } catch {
       throw new Error(`client/themes/${theme.id}.css does not exist`);
     }
-    assert(
-      indexHtml.includes(
-        `<link rel="stylesheet" href="/themes/${theme.id}.css">`,
-      ),
-      `index.html is missing the <link> for theme "${theme.id}"`,
-    );
     const block = tokenBlock(css, theme.id);
     for (const token of REQUIRED_TOKENS) {
       assert(
@@ -83,5 +76,23 @@ Deno.test("every non-default theme has a CSS file, an index.html link, and a ful
         `${theme.id}.css token block is missing ${token}`,
       );
     }
+  }
+});
+
+Deno.test("theme CSS is lazy: index.html has no eager theme links and ids fit the route pattern", async () => {
+  const indexHtml = await Deno.readTextFile(new URL("index.html", repoRoot));
+  for (const theme of THEMES) {
+    assert(
+      !indexHtml.includes(`href="/themes/${theme.id}.css"`),
+      `index.html must not eagerly link the "${theme.id}" stylesheet`,
+    );
+  }
+  // The inline script in index.html and THEME_ROUTE in server/static.ts both
+  // gate ids on this pattern; a mismatched id would never load.
+  for (const theme of THEMES) {
+    assert(
+      /^[a-z0-9-]{1,32}$/.test(theme.id),
+      `theme id "${theme.id}" does not match the /themes/ route pattern`,
+    );
   }
 });

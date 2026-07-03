@@ -7,10 +7,24 @@
     <title>Ephemeral chat</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/styles.css">
-    <link rel="stylesheet" href="/themes/90s.css">
-    <link rel="stylesheet" href="/themes/banana.css">
-    <link rel="stylesheet" href="/themes/gram.css">
-    <link rel="stylesheet" href="/themes/whosapp.css">
+    <script>
+      // Theme CSS is lazy: load only the saved theme before first paint.
+      // The id pattern must match THEME_ROUTE in server/static.ts.
+      (function () {
+        try {
+          var t = localStorage.getItem("theme");
+          if (t && t !== "default" && /^[a-z0-9-]{1,32}$/.test(t)) {
+            document.documentElement.dataset.theme = t;
+            document.write(
+              '<link rel="stylesheet" href="/themes/' + t +
+                '.css" data-theme-css="' + t + '">',
+            );
+          }
+        } catch (_) {
+          // Storage unavailable — the default theme needs no extra CSS.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>
