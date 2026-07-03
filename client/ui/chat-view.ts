@@ -97,8 +97,7 @@ export function renderChatView(
   const meta = el("div", "composer-meta");
   const counter = el("span", "counter");
   const ephemeralNote = el("span", "ephemeral-note");
-  ephemeralNote.textContent =
-    "Messages exist only in these two open tabs — when the chat ends, they're gone.";
+  ephemeralNote.textContent = "When the chat ends, everything is lost.";
   meta.append(counter, ephemeralNote);
   composer.append(row, meta);
 

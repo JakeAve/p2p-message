@@ -20,7 +20,7 @@
   --warn: #5c4600;
   --radius: 0px;
   --shadow: 4px 4px 0 rgba(0, 0, 0, 0.45);
-  --font-body: "Comic Sans MS", "Comic Sans", "Chalkboard SE", cursive;
+  --font-body: Chicago, Charcoal, Tahoma, "MS Sans Serif", Arial, sans-serif;
   --font-mono: "Courier New", Courier, monospace;
 }
 
