@@ -21,8 +21,14 @@ async function route(
       return new Response("Expected WebSocket upgrade", { status: 400 });
     }
     const { socket, response } = Deno.upgradeWebSocket(req);
-    const remoteAddr = info?.remoteAddr as Deno.NetAddr | undefined;
-    handleConnection(socket, remoteAddr?.hostname ?? "unknown");
+    let hostname = "unknown";
+    try {
+      hostname = (info?.remoteAddr as Deno.NetAddr | undefined)?.hostname ??
+        "unknown";
+    } catch {
+      // Connection may already be closed (client disconnected mid-handshake).
+    }
+    handleConnection(socket, hostname);
     return response;
   }
 
