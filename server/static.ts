@@ -31,6 +31,9 @@ export function withSecurityHeaders(res: Response): Response {
 /** /r/<22-char base64url path token> — same shape as shared/protocol.ts PATH_TOKEN_RE. */
 const PATH_TOKEN_ROUTE = /^\/r\/[A-Za-z0-9_-]{22}$/;
 
+/** /themes/<id>.css — theme ids are lowercase alphanumerics and hyphens only. */
+const THEME_ROUTE = /^\/themes\/([a-z0-9-]{1,32})\.css$/;
+
 async function textAsset(
   relPath: string,
   contentType: string,
@@ -76,7 +79,7 @@ async function serveAppJs(): Promise<Response> {
 
 /**
  * Serve the static routes: `/` and `/r/:pathToken` (both the shell —
- * role is decided client-side), `/styles.css`, `/app.js`.
+ * role is decided client-side), `/styles.css`, `/app.js`, `/themes/<id>.css`.
  * Returns null for anything else so the caller can 404.
  */
 export async function handleStaticRequest(
@@ -92,6 +95,17 @@ export async function handleStaticRequest(
   }
   if (pathname === "/app.js") {
     return await serveAppJs();
+  }
+  const theme = THEME_ROUTE.exec(pathname);
+  if (theme) {
+    try {
+      return await textAsset(
+        `client/themes/${theme[1]}.css`,
+        "text/css; charset=utf-8",
+      );
+    } catch {
+      return null; // registry/regex-shaped name but no such file
+    }
   }
   return null;
 }
