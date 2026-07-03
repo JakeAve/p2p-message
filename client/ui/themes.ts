@@ -9,6 +9,7 @@ export const THEMES: readonly ThemeOption[] = [
   { id: "default", label: "Default" },
   { id: "90s", label: "90s" },
   { id: "banana", label: "Banana" },
+  { id: "gram", label: "Gram" },
 ];
 
 export const DEFAULT_THEME_ID = "default";
