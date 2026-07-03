@@ -105,6 +105,23 @@
   background: rgba(255, 255, 255, 0.92);
 }
 
+/* The base .btn-quiet/.btn-primary colors (--muted / --accent) are
+ * illegible or shapeless against the teal header — give them explicit
+ * light-mode treatments here. */
+[data-theme="whosapp"] .chat-header .btn-quiet {
+  color: rgba(255, 255, 255, 0.9);
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+[data-theme="whosapp"] .chat-header .btn-quiet:hover:not(:disabled) {
+  color: #ffffff;
+  border-color: #ffffff;
+}
+
+[data-theme="whosapp"] .chat-header .btn-primary {
+  border: 1px solid rgba(255, 255, 255, 0.7);
+}
+
 @media (prefers-color-scheme: dark) {
   [data-theme="whosapp"] .chat-header {
     background: #202c33;
@@ -118,5 +135,22 @@
 
   [data-theme="whosapp"] .chat-header .status-pill {
     background: rgba(11, 20, 26, 0.6);
+  }
+
+  /* Dark header (#202c33) is already legible with the base button
+   * colors — restore them since the light-mode overrides above aren't
+   * scoped to a media query. */
+  [data-theme="whosapp"] .chat-header .btn-quiet {
+    color: var(--muted);
+    border-color: var(--border);
+  }
+
+  [data-theme="whosapp"] .chat-header .btn-quiet:hover:not(:disabled) {
+    color: var(--danger);
+    border-color: var(--danger);
+  }
+
+  [data-theme="whosapp"] .chat-header .btn-primary {
+    border: 1px solid transparent;
   }
 }
