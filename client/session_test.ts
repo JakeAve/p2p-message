@@ -1,9 +1,16 @@
 // client/session_test.ts
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertNotEquals,
+  assertRejects,
+} from "@std/assert";
 import {
   DEFAULT_GRACE_MS,
   DEFAULT_INVITE_WINDOW_MS,
+  GRACE_TICK_MS,
   KEY_CONFIRM_TIMEOUT_MS,
+  REJOIN_RETRY_MS,
   SendUnavailableError,
   Session,
   type SessionEvent,
@@ -388,6 +395,119 @@ Deno.test("void behavior: sendChat during reconnecting throws and nothing is buf
     SendUnavailableError,
   );
   assertEquals(pair.ta.sentData.length, sentBefore); // not sent, not queued — anywhere
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("peer loss → reconnecting with ~1/sec grace countdown", async () => {
+  const pair = await makeSecurePair();
+  pair.ta.emit({ type: "peer-left", peerId: "joiner-peer" });
+  await flushAsync();
+  assertEquals(pair.a.status, "reconnecting");
+  const countdowns: number[] = [];
+  const unsub = pair.a.on((e) => {
+    if (e.type === "grace-countdown") countdowns.push(e.msRemaining);
+  });
+  await pair.timersA.tick(3 * GRACE_TICK_MS);
+  unsub();
+  assert(
+    countdowns.length >= 3,
+    `expected >=3 ticks, got ${countdowns.length}`,
+  );
+  for (let i = 1; i < countdowns.length; i++) {
+    assert(countdowns[i] < countdowns[i - 1], "countdown must decrease");
+  }
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("grace → rejoin → rekey: secure again with a fresh, differing safety code", async () => {
+  const pair = await makeSecurePair();
+  // A's peer drops: the server tells A; B loses its own socket.
+  pair.ta.emit({ type: "peer-left", peerId: "joiner-peer" });
+  pair.tb.emit({ type: "signaling-lost" });
+  await flushAsync();
+  assertEquals(pair.a.status, "reconnecting");
+  assertEquals(pair.b.status, "reconnecting");
+  // B rejoined by roomId possession (FakeTransport auto-acks joinRoom).
+  assert(pair.tb.calls.includes(`join:${pair.roomId}`));
+  assert(pair.tb.calls.filter((c) => c === "connect").length >= 2);
+  // Fresh SDP/ICE exchange succeeded → DataChannel reopens → full rekey.
+  const secureA = waitForEvent(pair.a, "secure");
+  const secureB = waitForEvent(pair.b, "secure");
+  pair.ta.emit({ type: "peer-joined", peerId: "joiner-peer-2" });
+  openData(pair.ta, pair.tb);
+  const [sa, sb] = await Promise.all([secureA, secureB]);
+  assertEquals(sa.safetyCode, sb.safetyCode);
+  assertNotEquals(sa.safetyCode, pair.safetyCodeA); // spec §8.3: code changes on rekey
+  const chatAtA = waitForEvent(pair.a, "chat");
+  await pair.b.sendChat("back again");
+  assertEquals((await chatAtA).text, "back again");
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("failed reconnect is retried on the rejoin timer", async () => {
+  const pair = await makeSecurePair();
+  pair.tb.connectError = new Error("network down");
+  pair.tb.emit({ type: "signaling-lost" });
+  await flushAsync();
+  const connectsAfterDrop = pair.tb.calls.filter((c) => c === "connect").length;
+  pair.tb.connectError = null;
+  await pair.timersB.tick(REJOIN_RETRY_MS);
+  assert(
+    pair.tb.calls.filter((c) => c === "connect").length > connectsAfterDrop,
+    "a retry connect should have happened",
+  );
+  assert(pair.tb.calls.includes(`join:${pair.roomId}`));
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("rejoin answered with room-not-found ends with grace-expired", async () => {
+  const pair = await makeSecurePair();
+  pair.tb.respondToJoin = [{ type: "server-error", code: "room-not-found" }];
+  const ended = waitForEvent(pair.b, "ended");
+  pair.tb.emit({ type: "signaling-lost" });
+  assertEquals((await ended).reason, "grace-expired");
+  pair.a.end();
+  await flushAsync();
+});
+
+Deno.test("local grace deadline expiring ends with grace-expired", async () => {
+  const pair = await makeSecurePair();
+  pair.ta.emit({ type: "peer-left", peerId: "joiner-peer" });
+  await flushAsync();
+  const ended = waitForEvent(pair.a, "ended", 10_000);
+  await pair.timersA.tick(DEFAULT_GRACE_MS);
+  assertEquals((await ended).reason, "grace-expired");
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("room-closed grace-expired from the server maps 1:1", async () => {
+  const pair = await makeSecurePair();
+  pair.ta.emit({ type: "peer-left", peerId: "joiner-peer" });
+  await flushAsync();
+  const ended = waitForEvent(pair.a, "ended");
+  pair.ta.emit({ type: "room-closed", reason: "grace-expired" });
+  assertEquals((await ended).reason, "grace-expired");
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("joiner uses the server-provided graceDurationMs for its countdown", async () => {
+  const pair = await makeStartedPair(); // FakeTransport's joined ack carries 120_000
+  const secureB = waitForEvent(pair.b, "secure");
+  openData(pair.ta, pair.tb);
+  await secureB;
+  const first = waitForEvent(pair.b, "grace-countdown");
+  pair.tb.emit({ type: "peer-left", peerId: "creator-peer" });
+  assertEquals((await first).msRemaining, 120_000);
   pair.a.end();
   pair.b.end();
   await flushAsync();

@@ -114,6 +114,11 @@ export class Session {
   private preKeyBuffer: EncryptedFrame[] = [];
   private confirmTimer: number | null = null;
 
+  // Grace state — a single room-level countdown (spec §5).
+  private graceDeadline = 0;
+  private graceTimer: number | null = null;
+  private rejoinTimer: number | null = null;
+
   constructor(opts: SessionOptions, deps: SessionDeps = {}) {
     this.opts = opts;
     this.timers = deps.timers ?? realTimers;
@@ -233,17 +238,20 @@ export class Session {
       case "peer-joined":
         break; // status changes when the DataChannel opens
       case "data-open":
+        this.clearGraceTimers();
         this.setStatus("securing");
-        await this.beginHandshake();
+        await this.beginHandshake(); // grace→paired = the first-connect flow re-run (spec §7.1)
         break;
       case "data-message":
         await this.handleRaw(e.data);
         break;
       case "data-closed":
       case "peer-left":
+        // DataChannel-level loss and server-observed loss are equally valid
+        // "peer is gone" triggers (spec §5). Our own socket is still fine,
+        // so we wait for the peer to rejoin — no rejoin of our own.
         if (this._status === "secure" || this._status === "securing") {
-          this.resetHandshakeState();
-          this.setStatus("reconnecting");
+          this.enterGrace(false);
         }
         break;
       case "server-error":
@@ -253,7 +261,14 @@ export class Session {
         this.finish(e.reason);
         break;
       case "signaling-lost":
-        this.finish("signaling-lost");
+        if (this._status === "secure" || this._status === "securing") {
+          // We are the dropped peer: grace + rejoin by roomId possession.
+          this.enterGrace(true);
+        } else if (this._status === "reconnecting") {
+          this.scheduleRejoin();
+        } else {
+          this.finish("signaling-lost");
+        }
         break;
     }
   }
@@ -448,8 +463,70 @@ export class Session {
     this.finish(reason);
   }
 
+  private enterGrace(needsRejoin: boolean): void {
+    if (this._status === "reconnecting") {
+      if (needsRejoin) this.scheduleRejoin();
+      return;
+    }
+    this.resetHandshakeState(); // old key is dead; sendChat now refuses (void behavior)
+    this.setStatus("reconnecting");
+    this.graceDeadline = this.timers.now() + this.graceDurationMs;
+    this.emit({ type: "grace-countdown", msRemaining: this.graceDurationMs });
+    this.graceTimer = this.timers.setInterval(
+      () => this.tickGrace(),
+      GRACE_TICK_MS,
+    );
+    if (needsRejoin) {
+      this.attemptRejoin();
+    }
+  }
+
+  private tickGrace(): void {
+    const msRemaining = this.graceDeadline - this.timers.now();
+    if (msRemaining <= 0) {
+      this.finish("grace-expired");
+    } else {
+      this.emit({ type: "grace-countdown", msRemaining });
+    }
+  }
+
+  private scheduleRejoin(): void {
+    if (this.rejoinTimer !== null) return;
+    this.rejoinTimer = this.timers.setTimeout(() => {
+      this.rejoinTimer = null;
+      this.attemptRejoin();
+    }, REJOIN_RETRY_MS);
+  }
+
+  private attemptRejoin(): void {
+    void this.transport.connect().then(
+      () => {
+        if (this._status === "reconnecting") {
+          this.transport.joinRoom(this.roomId);
+        }
+      },
+      () => {
+        if (this._status === "reconnecting") {
+          this.scheduleRejoin();
+        }
+      },
+    );
+  }
+
+  private clearGraceTimers(): void {
+    if (this.graceTimer !== null) {
+      this.timers.clearInterval(this.graceTimer);
+      this.graceTimer = null;
+    }
+    if (this.rejoinTimer !== null) {
+      this.timers.clearTimeout(this.rejoinTimer);
+      this.rejoinTimer = null;
+    }
+  }
+
   private finish(reason: EndReason, closeTransport = true): void {
     if (this._status === "ended") return;
+    this.clearGraceTimers();
     this.resetHandshakeState();
     const pendingAck = this.startAck;
     this.startAck = null;
