@@ -114,6 +114,9 @@ async function startCreator(opts: CreateOptions): Promise<void> {
   const fragment = bytesToBase64url(fragmentSecret);
   const pathToken = await derivePathToken(fragmentSecret);
   const link = buildShareLink(location.origin, pathToken, fragment);
+  // So a reload/crash after pairing can rejoin via the same recovery path a
+  // joiner already uses (the address bar otherwise never leaves "/").
+  history.replaceState(null, "", link);
 
   const session = new Session({
     role: "creator",
