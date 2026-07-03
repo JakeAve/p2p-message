@@ -40,10 +40,12 @@ Deno.test("STUN only: parses comma-separated list, no TURN entry", async () => {
   );
 });
 
-Deno.test("no env at all: empty iceServers array", async () => {
+Deno.test("no env at all: falls back to the default public STUN servers", async () => {
   await withEnv({}, async () => {
     const { iceServers } = await getIceServers();
-    assertEquals(iceServers, []);
+    assertEquals(iceServers, [{
+      urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"],
+    }]);
   });
 });
 
