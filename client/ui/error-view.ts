@@ -2,9 +2,14 @@ import { el } from "./dom.ts";
 import type { Screen } from "./screens.ts";
 
 /** Render a terminal screen (error or ended state) into `root`. */
-export function renderScreen(root: HTMLElement, screen: Screen): void {
+export function renderScreen(
+  root: HTMLElement,
+  screen: Screen,
+  opts?: { testHook?: string },
+): void {
   root.innerHTML = "";
   const card = el("div", "card stack screen");
+  if (opts?.testHook) card.dataset.e2e = opts.testHook;
   const title = el("h1");
   title.textContent = screen.title;
   const body = el("p", "muted");

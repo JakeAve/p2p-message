@@ -30,6 +30,7 @@ export function renderShareView(
   linkInput.type = "text";
   linkInput.readOnly = true;
   linkInput.value = opts.link;
+  linkInput.dataset.e2e = "share-link";
   linkInput.addEventListener("focus", () => linkInput.select());
   const copyBtn = el("button", "btn btn-primary");
   copyBtn.textContent = "Copy";

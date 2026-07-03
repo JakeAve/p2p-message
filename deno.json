@@ -7,7 +7,9 @@
     "build": "deno run -A scripts/build.ts",
     "setup": "git config core.hooksPath .githooks && chmod +x .githooks/pre-commit .githooks/pre-push",
     "check": "deno fmt --check . && deno lint . && deno check",
-    "test": "deno test -A --permit-no-files",
+    "test": "deno test -A --permit-no-files client server shared scripts main_test.ts",
+    "e2e:install": "deno run -A npm:playwright install chromium",
+    "e2e": "deno task build && deno test -A e2e",
     "pre-commit": "deno task check && deno task test",
     "pre-push": "deno task check && deno task test"
   },
@@ -17,6 +19,7 @@
     "@std/path": "jsr:@std/path@1",
     "@std/dotenv": "jsr:@std/dotenv@^0.225.6",
     "esbuild": "npm:esbuild@0.20.2",
+    "playwright": "npm:playwright@^1.49.0",
     "qrcode-generator": "npm:qrcode-generator@^1.4.4"
   }
 }

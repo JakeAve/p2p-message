@@ -1,6 +1,8 @@
 .env
 .DS_Store
-docs
+docs/*
+!docs/self-hosting.md
+!docs/coturn.md
 .superpowers
 .claude/worktrees/*
 dist/
