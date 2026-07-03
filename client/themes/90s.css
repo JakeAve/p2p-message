@@ -36,8 +36,19 @@
 /* Chunky beveled chrome. */
 [data-theme="90s"] .btn,
 [data-theme="90s"] .preset-row span,
-[data-theme="90s"] .theme-picker {
+[data-theme="90s"] .theme-select {
   border: 2px outset #ffffff;
+}
+
+/* Round chrome buttons go square-beveled, like tiny system controls. */
+[data-theme="90s"] .settings-btn,
+[data-theme="90s"] .safety-toggle,
+[data-theme="90s"] .settings-close {
+  border: 2px outset #ffffff;
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text);
+  font-style: normal;
 }
 
 [data-theme="90s"] .btn:active:not(:disabled) {
@@ -55,9 +66,11 @@
   border: 2px outset #ffffff;
 }
 
-/* Cards, chat window and composer read as beveled system dialogs. */
+/* Cards, chat window and popups read as beveled system dialogs. */
 [data-theme="90s"] .card,
-[data-theme="90s"] .chat {
+[data-theme="90s"] .chat,
+[data-theme="90s"] .settings-dialog,
+[data-theme="90s"] .safety-popover {
   border: 2px outset #ffffff;
 }
 

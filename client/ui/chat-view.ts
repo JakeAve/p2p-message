@@ -30,7 +30,7 @@ export interface ChatViewController {
 
 /**
  * Spec §10.4 — message list (memory only), composer with the 4,000-byte
- * live counter, safety code in the header with the pinned explainer,
+ * live counter, safety code behind an info button in the header,
  * connection status (incl. grace countdown), End chat button.
  */
 export function renderChatView(
@@ -40,17 +40,44 @@ export function renderChatView(
   root.innerHTML = "";
   const view = el("div", "chat");
 
-  // Header: safety code + status + end button.
+  // Header: safety code with its explainer behind an info button + status
+  // + end button.
   const header = el("div", "chat-header");
   const safety = el("div", "safety");
   const safetyCode = el("div", "safety-code");
   safetyCode.dataset.e2e = "safety-code";
   safetyCode.textContent = "· · · · · ·"; // no code until first key-confirm
+  const safetyToggle = el("button", "safety-toggle");
+  safetyToggle.dataset.e2e = "safety-toggle";
+  safetyToggle.setAttribute("aria-label", "About the safety code");
+  safetyToggle.setAttribute("aria-expanded", "false");
+  safetyToggle.textContent = "i";
+  const safetyPopover = el("div", "safety-popover");
+  safetyPopover.hidden = true;
   const safetyHint = el("p", "safety-hint");
   safetyHint.textContent =
     "Both of you should see the same code. Confirm it over a phone call " +
     "or another channel if you're sending something sensitive.";
-  safety.append(safetyCode, safetyHint);
+  safetyPopover.append(safetyHint);
+  const setSafetyOpen = (open: boolean) => {
+    safetyPopover.hidden = !open;
+    safetyToggle.setAttribute("aria-expanded", String(open));
+  };
+  safetyToggle.addEventListener("click", () => {
+    setSafetyOpen(safetyPopover.hidden);
+  });
+  // Light dismiss: click anywhere else or Escape closes the popover.
+  const onDocumentClick = (event: MouseEvent) => {
+    if (!safetyPopover.hidden && !safety.contains(event.target as Node)) {
+      setSafetyOpen(false);
+    }
+  };
+  document.addEventListener("click", onDocumentClick);
+  const onDocumentKeydown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") setSafetyOpen(false);
+  };
+  document.addEventListener("keydown", onDocumentKeydown);
+  safety.append(safetyCode, safetyToggle, safetyPopover);
 
   const right = el("div", "chat-header-right");
   const peerName = el("span", "peer-name");
@@ -111,14 +138,25 @@ export function renderChatView(
       textarea.value.trim().length === 0 ||
       bytes > MAX_MESSAGE_BYTES;
   };
+  // Grow with the text up to the CSS max-height (then scroll). scrollHeight
+  // excludes borders, so add them back for border-box sizing.
+  const autosize = () => {
+    textarea.style.height = "auto";
+    const borders = textarea.offsetHeight - textarea.clientHeight;
+    textarea.style.height = `${textarea.scrollHeight + borders}px`;
+  };
   const send = () => {
     if (sendBtn.disabled) return;
     const text = textarea.value;
     textarea.value = "";
     updateComposer();
+    autosize();
     handlers.onSend(text);
   };
-  textarea.addEventListener("input", updateComposer);
+  textarea.addEventListener("input", () => {
+    updateComposer();
+    autosize();
+  });
   sendBtn.addEventListener("click", send);
   textarea.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -173,6 +211,8 @@ export function renderChatView(
       updateComposer();
     },
     destroy() {
+      document.removeEventListener("click", onDocumentClick);
+      document.removeEventListener("keydown", onDocumentKeydown);
       view.remove();
     },
   };

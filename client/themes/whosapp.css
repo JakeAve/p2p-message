@@ -95,9 +95,21 @@
   border-bottom: none;
 }
 
-[data-theme="whosapp"] .chat-header .safety-hint,
 [data-theme="whosapp"] .chat-header .peer-name {
   color: rgba(255, 255, 255, 0.85);
+}
+
+/* The info button sits on teal; the base muted color would vanish. Its
+ * popover uses --surface/--text, so only the button needs the override. */
+[data-theme="whosapp"] .chat-header .safety-toggle {
+  color: rgba(255, 255, 255, 0.9);
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+[data-theme="whosapp"] .chat-header .safety-toggle:hover,
+[data-theme="whosapp"] .chat-header .safety-toggle[aria-expanded="true"] {
+  color: #ffffff;
+  border-color: #ffffff;
 }
 
 /* Solid pill fills — the default low-opacity tints vanish on teal. */
@@ -128,9 +140,20 @@
     color: #e9edef;
   }
 
-  [data-theme="whosapp"] .chat-header .safety-hint,
   [data-theme="whosapp"] .chat-header .peer-name {
     color: #8696a0;
+  }
+
+  /* Dark header is already legible with the base toggle colors. */
+  [data-theme="whosapp"] .chat-header .safety-toggle {
+    color: var(--muted);
+    border-color: var(--muted);
+  }
+
+  [data-theme="whosapp"] .chat-header .safety-toggle:hover,
+  [data-theme="whosapp"] .chat-header .safety-toggle[aria-expanded="true"] {
+    color: var(--accent);
+    border-color: var(--accent);
   }
 
   [data-theme="whosapp"] .chat-header .status-pill {
