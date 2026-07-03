@@ -10,6 +10,7 @@ export const THEMES: readonly ThemeOption[] = [
   { id: "90s", label: "90s" },
   { id: "banana", label: "Banana" },
   { id: "gram", label: "Gram" },
+  { id: "whosapp", label: "Whosapp" },
 ];
 
 export const DEFAULT_THEME_ID = "default";
