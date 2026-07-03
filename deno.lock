@@ -7,6 +7,7 @@
     "jsr:@std/dotenv@~0.225.6": "0.225.6",
     "jsr:@std/encoding@^1.0.5": "1.0.10",
     "jsr:@std/internal@^1.0.12": "1.0.12",
+    "jsr:@std/path@1": "1.1.4",
     "jsr:@std/path@^1.0.6": "1.1.4",
     "npm:esbuild@0.20.2": "0.20.2",
     "npm:qrcode-generator@^1.4.4": "1.5.2"
@@ -17,7 +18,7 @@
       "dependencies": [
         "jsr:@std/bytes",
         "jsr:@std/encoding",
-        "jsr:@std/path"
+        "jsr:@std/path@^1.0.6"
       ]
     },
     "@std/assert@1.0.18": {
@@ -200,6 +201,7 @@
       "jsr:@luca/esbuild-deno-loader@~0.11.1",
       "jsr:@std/assert@1",
       "jsr:@std/dotenv@~0.225.6",
+      "jsr:@std/path@1",
       "npm:esbuild@0.20.2",
       "npm:qrcode-generator@^1.4.4"
     ]
