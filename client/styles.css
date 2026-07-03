@@ -450,6 +450,22 @@ a.start-new {
   font-weight: 600;
 }
 
+/* ===== Theme picker ===== */
+.theme-picker {
+  position: fixed;
+  top: calc(8px + env(safe-area-inset-top));
+  right: calc(8px + env(safe-area-inset-right));
+  z-index: 20; /* above the share overlay (10) */
+  min-height: 44px; /* touch target */
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+
 /* ===== Small screens ===== */
 @media (max-width: 520px) {
   #app {
@@ -468,7 +484,7 @@ a.start-new {
 
   .share-card {
     justify-content: flex-start;
-    padding-top: 48px;
+    padding-top: 64px;
   }
 
   .chat {
@@ -476,5 +492,9 @@ a.start-new {
     max-width: none;
     border: none;
     border-radius: 0;
+  }
+
+  .chat-header {
+    padding-right: 110px;
   }
 }
