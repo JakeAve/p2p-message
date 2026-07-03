@@ -1,1 +1,96 @@
-/* 90s theme — populated in the "90s theme" task. */
+/*
+ * 90s theme — one fixed look. The full token override on
+ * :root[data-theme="90s"] (specificity 0,2,0) beats both the default :root
+ * block and its dark-mode media query, so no dark block is needed.
+ */
+:root[data-theme="90s"] {
+  --bg: #008080; /* classic teal desktop */
+  --surface: #c0c0c0; /* system gray */
+  --surface-alt: #d4d0c8;
+  --text: #000000;
+  --muted: #2b2b2b;
+  --border: #808080;
+  --accent: #000080; /* title-bar navy */
+  --accent-hover: #1084d0;
+  --accent-contrast: #ffffff;
+  --sent: #000080;
+  --sent-text: #ffffff;
+  --danger: #aa0000;
+  --ok: #005a00;
+  --warn: #5c4600;
+  --radius: 0px;
+  --shadow: 4px 4px 0 rgba(0, 0, 0, 0.45);
+  --font-body: "Comic Sans MS", "Comic Sans", "Chalkboard SE", cursive;
+  --font-mono: "Courier New", Courier, monospace;
+}
+
+/* Tiled diagonal texture over the teal desktop. */
+[data-theme="90s"] body {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.05) 0 10px,
+    transparent 10px 20px
+  );
+}
+
+/* Chunky beveled chrome. */
+[data-theme="90s"] .btn,
+[data-theme="90s"] .preset-row span,
+[data-theme="90s"] .theme-picker {
+  border: 2px outset #ffffff;
+}
+
+[data-theme="90s"] .btn:active:not(:disabled) {
+  border-style: inset;
+}
+
+[data-theme="90s"] .field input[type="text"],
+[data-theme="90s"] .composer textarea,
+[data-theme="90s"] .share-link input {
+  border: 2px inset #ffffff;
+  background: #ffffff;
+}
+
+[data-theme="90s"] .msg.received {
+  border: 2px outset #ffffff;
+}
+
+/* Cards, chat window and composer read as beveled system dialogs. */
+[data-theme="90s"] .card,
+[data-theme="90s"] .chat {
+  border: 2px outset #ffffff;
+}
+
+/* Status pills get solid, legible fills instead of low-opacity tints
+   (the tints in styles.css are tuned for light/dark, not gray-on-teal). */
+[data-theme="90s"] .status-pill.secure {
+  background: #00aa00;
+  color: #000000;
+  border: 1px solid #005a00;
+}
+
+[data-theme="90s"] .status-pill.connecting,
+[data-theme="90s"] .status-pill.securing {
+  background: #ffff00;
+  color: #000000;
+  border: 1px solid #5c4600;
+}
+
+[data-theme="90s"] .status-pill.reconnecting {
+  background: #ff8080;
+  color: #000000;
+  border: 1px solid #aa0000;
+}
+
+/* Preset pills use the same solid navy selection as buttons/sent bubbles. */
+[data-theme="90s"] .preset-row input:checked + span {
+  background: var(--accent);
+  border-color: #ffffff;
+  color: var(--accent-contrast);
+}
+
+/* Keep the QR code on a plain white tile so it stays scannable. */
+[data-theme="90s"] .qr svg {
+  border: 2px inset #ffffff;
+  border-radius: 0;
+}
