@@ -58,7 +58,7 @@ deno task dev    # dev server at http://localhost:8000
 ## Build and self-host
 
 ```bash
-deno task build  # bundle the client into dist/
+deno task build  # bundle the client into dist/app.js
 deno run --allow-net --allow-read --allow-env main.ts
 ```
 
@@ -70,13 +70,11 @@ coturn.
 ## Contributing
 
 ```bash
-deno task setup  # once: install git hooks (fmt, lint, type check, test)
+deno task setup  # once: install git hooks, download Playwright's Chromium
 deno task check  # fmt --check, lint, type check
-deno task test         # unit + integration tests
-deno task e2e:install  # once: download the Chromium build Playwright drives
-deno task e2e          # browser smoke test — not part of the default test
-                       # task or git hooks; in CI, run it as a manual or
-                       # nightly job (after e2e:install)
+deno task test   # unit + integration tests — pre-commit gate
+deno task e2e    # browser smoke test — pre-push gate; requires the
+                 # Chromium build from `deno task setup`/`e2e:install`
 ```
 
 ## Roadmap (not in v1)

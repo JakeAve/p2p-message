@@ -9,11 +9,18 @@
 // deliberately NOT the @playwright/test runner: no playwright.config, no
 // package.json; assertions come from @std/assert.
 //
-// Deliberately NOT part of `deno task test` / pre-commit / pre-push: it
-// launches a real Chromium, installed into ~/.cache/ms-playwright by
-// `deno task e2e:install`. CI note: run this as a manual or nightly job
-// that runs `deno task e2e:install` first (cache ~/.cache/ms-playwright
-// between runs) — never as a pre-commit/pre-push gate.
+// Requires a real Chromium, installed into ~/.cache/ms-playwright by
+// `deno task e2e:install` (also run once by `deno task setup`; CI must cache
+// ~/.cache/ms-playwright between runs). Not part of `deno task test` or the
+// pre-commit hook (no browser needed for those), but IS part of `pre-push`
+// via `deno task e2e` — pushing requires Chromium to already be installed.
+//
+// The spawned server in startServer() below runs with only
+// --allow-net/--allow-read/--allow-env (no --allow-run/--allow-write), so it
+// serves the prebuilt dist/app.js rather than bundling on the fly. Always
+// run this test through `deno task e2e` (which builds first) — a bare
+// `deno test -A e2e` against a missing or stale dist/ will hang waiting for
+// "secure" with no indication that the bundle is the problem.
 //
 // STUN-only env: localhost-to-localhost WebRTC gathers host candidates and
 // needs no TURN relay (and no STUN reply either — the STUN URL is present
