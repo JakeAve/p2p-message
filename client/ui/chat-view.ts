@@ -112,23 +112,42 @@ export function renderChatView(
   });
   status.append(statusPill, statusCountdown, statusPopover);
 
-  // End chat: in-page confirm step (native confirm()/alert() can't be
-  // dismissed by headless automation, and are poor UX anyway).
+  // End chat: native <dialog> confirmation (same pattern as the settings
+  // modal) rather than window.confirm(), which is undismissable by headless
+  // automation and poor UX.
   const endBtn = el("button", "btn btn-quiet");
   endBtn.textContent = "End chat";
   endBtn.dataset.e2e = "end-chat";
-  const endConfirmBtn = el("button", "btn btn-primary");
-  endConfirmBtn.textContent = "Confirm end chat?";
+  const endDialog = el("dialog", "end-chat-dialog");
+  const endBody = el("div", "end-chat-body");
+  const endTitle = el("h2");
+  endTitle.textContent = "End this chat?";
+  const endHint = el("p");
+  endHint.textContent =
+    "All messages will be permanently deleted for both of you and " +
+    "cannot be recovered.";
+  const endActions = el("div", "dialog-actions");
+  const endCancelBtn = el("button", "btn btn-quiet");
+  endCancelBtn.textContent = "Cancel";
+  endCancelBtn.dataset.e2e = "end-cancel";
+  endCancelBtn.addEventListener("click", () => endDialog.close());
+  const endConfirmBtn = el("button", "btn btn-danger");
+  endConfirmBtn.textContent = "End chat";
   endConfirmBtn.dataset.e2e = "end-confirm";
-  endConfirmBtn.hidden = true;
-  endBtn.addEventListener("click", () => {
-    endBtn.hidden = true;
-    endConfirmBtn.hidden = false;
-  });
   endConfirmBtn.addEventListener("click", () => {
+    endDialog.close();
     handlers.onEnd();
   });
-  right.append(peerName, status, endBtn, endConfirmBtn);
+  endActions.append(endCancelBtn, endConfirmBtn);
+  endBody.append(endTitle, endHint, endActions);
+  endDialog.append(endBody);
+  endBtn.addEventListener("click", () => endDialog.showModal());
+  // Light dismiss: the padded content is .end-chat-body, so a click landing
+  // on the <dialog> itself is a backdrop click. Escape closes natively.
+  endDialog.addEventListener("click", (event) => {
+    if (event.target === endDialog) endDialog.close();
+  });
+  right.append(peerName, status, endBtn);
   header.append(safety, right);
 
   // Message list — memory/DOM only, never persisted anywhere.
@@ -191,7 +210,7 @@ export function renderChatView(
   });
   updateComposer();
 
-  view.append(header, messages, composer);
+  view.append(header, messages, composer, endDialog);
   root.append(view);
 
   return {
