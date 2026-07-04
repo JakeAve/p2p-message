@@ -368,29 +368,96 @@ h1 {
   color: var(--muted);
 }
 
+.status {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .status-pill {
-  padding: 4px 10px;
-  border-radius: 999px;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.status-pill.secure .status-dot {
+  background: var(--ok);
+}
+
+.status-pill.connecting .status-dot,
+.status-pill.securing .status-dot {
+  background: var(--warn);
+  animation: status-pulse 1.6s ease-in-out infinite;
+}
+
+.status-pill.securing .status-dot {
+  animation-duration: 0.8s;
+}
+
+.status-pill.reconnecting .status-dot {
+  background: var(--danger);
+  animation: status-pulse 0.9s ease-in-out infinite;
+}
+
+.status-countdown {
   font-size: 0.78rem;
   font-weight: 600;
+  color: var(--danger);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
-.status-pill.secure {
-  background: rgba(26, 127, 55, 0.14);
-  color: var(--ok);
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
-.status-pill.connecting,
-.status-pill.securing {
-  background: rgba(154, 103, 0, 0.14);
-  color: var(--warn);
+@media (prefers-reduced-motion: reduce) {
+  .status-dot {
+    animation: none !important;
+  }
 }
 
-.status-pill.reconnecting {
-  background: rgba(179, 38, 30, 0.14);
-  color: var(--danger);
+.status-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 5;
+  width: min(260px, 76vw);
+  padding: 10px 14px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.status-hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.4;
+  margin: 0;
 }
 
 .messages {

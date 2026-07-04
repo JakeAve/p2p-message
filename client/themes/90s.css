@@ -70,29 +70,9 @@
 [data-theme="90s"] .card,
 [data-theme="90s"] .chat,
 [data-theme="90s"] .settings-dialog,
-[data-theme="90s"] .safety-popover {
+[data-theme="90s"] .safety-popover,
+[data-theme="90s"] .status-popover {
   border: 2px outset #ffffff;
-}
-
-/* Status pills get solid, legible fills instead of low-opacity tints
-   (the tints in styles.css are tuned for light/dark, not gray-on-teal). */
-[data-theme="90s"] .status-pill.secure {
-  background: #00aa00;
-  color: #000000;
-  border: 1px solid #005a00;
-}
-
-[data-theme="90s"] .status-pill.connecting,
-[data-theme="90s"] .status-pill.securing {
-  background: #ffff00;
-  color: #000000;
-  border: 1px solid #5c4600;
-}
-
-[data-theme="90s"] .status-pill.reconnecting {
-  background: #ff8080;
-  color: #000000;
-  border: 1px solid #aa0000;
 }
 
 /* Preset pills use the same solid navy selection as buttons/sent bubbles. */

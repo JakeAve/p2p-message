@@ -112,9 +112,16 @@
   border-color: #ffffff;
 }
 
-/* Solid pill fills — the default low-opacity tints vanish on teal. */
+/* The secure-state dot color equals the teal header itself, so give the
+ * button a light backing disc or the dot would vanish. The countdown text
+ * has no such backing, so it needs its own override — the base --danger
+ * red is too close in brightness to the teal to read well. */
 [data-theme="whosapp"] .chat-header .status-pill {
   background: rgba(255, 255, 255, 0.92);
+}
+
+[data-theme="whosapp"] .chat-header .status-countdown {
+  color: #ffffff;
 }
 
 /* The base .btn-quiet/.btn-primary colors (--muted / --accent) are

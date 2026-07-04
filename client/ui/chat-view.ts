@@ -71,19 +71,46 @@ export function renderChatView(
     if (!safetyPopover.hidden && !safety.contains(event.target as Node)) {
       setSafetyOpen(false);
     }
+    if (!statusPopover.hidden && !status.contains(event.target as Node)) {
+      setStatusOpen(false);
+    }
   };
   document.addEventListener("click", onDocumentClick);
   const onDocumentKeydown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") setSafetyOpen(false);
+    if (event.key === "Escape") {
+      setSafetyOpen(false);
+      setStatusOpen(false);
+    }
   };
   document.addEventListener("keydown", onDocumentKeydown);
   safety.append(safetyCode, safetyToggle, safetyPopover);
 
   const right = el("div", "chat-header-right");
   const peerName = el("span", "peer-name");
-  const statusPill = el("span", "status-pill connecting");
+  const status = el("div", "status");
+  const statusPill = el("button", "status-pill connecting");
   statusPill.dataset.e2e = "status";
-  statusPill.textContent = "Connecting…";
+  statusPill.setAttribute("aria-expanded", "false");
+  statusPill.setAttribute(
+    "aria-label",
+    "Connection status: connecting. Click for details.",
+  );
+  statusPill.append(el("span", "status-dot"));
+  const statusCountdown = el("span", "status-countdown");
+  statusCountdown.hidden = true;
+  const statusPopover = el("div", "status-popover");
+  statusPopover.hidden = true;
+  const statusHint = el("p", "status-hint");
+  statusHint.textContent = "Waiting for the other person to join…";
+  statusPopover.append(statusHint);
+  const setStatusOpen = (open: boolean) => {
+    statusPopover.hidden = !open;
+    statusPill.setAttribute("aria-expanded", String(open));
+  };
+  statusPill.addEventListener("click", () => {
+    setStatusOpen(statusPopover.hidden);
+  });
+  status.append(statusPill, statusCountdown, statusPopover);
 
   // End chat: in-page confirm step (native confirm()/alert() can't be
   // dismissed by headless automation, and are poor UX anyway).
@@ -101,7 +128,7 @@ export function renderChatView(
   endConfirmBtn.addEventListener("click", () => {
     handlers.onEnd();
   });
-  right.append(peerName, statusPill, endBtn, endConfirmBtn);
+  right.append(peerName, status, endBtn, endConfirmBtn);
   header.append(safety, right);
 
   // Message list — memory/DOM only, never persisted anywhere.
@@ -191,16 +218,35 @@ export function renderChatView(
     },
     setStatus(status) {
       statusPill.className = `status-pill ${status.kind}`;
+      statusCountdown.hidden = status.kind !== "reconnecting";
       if (status.kind === "reconnecting") {
-        statusPill.textContent = `Reconnecting — ${
+        statusCountdown.textContent = `${
           formatCountdown(status.msRemaining)
         } left`;
+        statusPill.setAttribute(
+          "aria-label",
+          "Connection status: reconnecting. Click for details.",
+        );
+        statusHint.textContent =
+          "The other person disconnected. Reconnecting before the chat ends…";
       } else if (status.kind === "secure") {
-        statusPill.textContent = "Secure";
+        statusPill.setAttribute(
+          "aria-label",
+          "Connection status: secure. Click for details.",
+        );
+        statusHint.textContent = "Your messages are end-to-end encrypted.";
       } else if (status.kind === "securing") {
-        statusPill.textContent = "Securing…";
+        statusPill.setAttribute(
+          "aria-label",
+          "Connection status: securing. Click for details.",
+        );
+        statusHint.textContent = "Setting up end-to-end encryption…";
       } else {
-        statusPill.textContent = "Connecting…";
+        statusPill.setAttribute(
+          "aria-label",
+          "Connection status: connecting. Click for details.",
+        );
+        statusHint.textContent = "Waiting for the other person to join…";
       }
     },
     setStatusAttr(status) {
