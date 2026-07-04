@@ -8,7 +8,7 @@ const repoRoot = new URL("../", import.meta.url);
  * the script without updating this constant fails tests, not production.
  */
 export const THEME_BOOT_SCRIPT_HASH =
-  "sha256-Ec3VgLi2mQwC+v6WgZdc/4KZ8ndNqGKkbw3vVkFLtOY=";
+  "sha256-F7NeMJtAxDWGKR58UDe5oR8hJk7NfB6Iuf1hMRcXAw4=";
 
 export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "content-security-policy":
@@ -42,6 +42,9 @@ const PATH_TOKEN_ROUTE = /^\/r\/[A-Za-z0-9_-]{22}$/;
 
 /** /themes/<id>.css — theme ids are lowercase alphanumerics and hyphens only. */
 const THEME_ROUTE = /^\/themes\/([a-z0-9-]{1,32})\.css$/;
+
+/** /favicons/<id>.svg — same id shape, one wax-seal recolor per theme. */
+const FAVICON_ROUTE = /^\/favicons\/([a-z0-9-]{1,32})\.svg$/;
 
 async function textAsset(
   relPath: string,
@@ -111,6 +114,17 @@ export async function handleStaticRequest(
       return await textAsset(
         `client/themes/${theme[1]}.css`,
         "text/css; charset=utf-8",
+      );
+    } catch {
+      return null; // registry/regex-shaped name but no such file
+    }
+  }
+  const favicon = FAVICON_ROUTE.exec(pathname);
+  if (favicon) {
+    try {
+      return await textAsset(
+        `client/favicons/${favicon[1]}.svg`,
+        "image/svg+xml",
       );
     } catch {
       return null; // registry/regex-shaped name but no such file

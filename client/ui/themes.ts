@@ -46,6 +46,12 @@ function ensureThemeCss(id: string): Promise<void> {
   });
 }
 
+/** Point the <link id="favicon"> at this theme's wax-seal recolor. */
+function applyFavicon(id: string): void {
+  const link = document.getElementById("favicon") as HTMLLinkElement | null;
+  if (link) link.href = `/favicons/${id}.svg`;
+}
+
 /** The most recently requested theme; guards against out-of-order CSS loads. */
 let requestedTheme: string | null = null;
 
@@ -63,6 +69,7 @@ export function initTheme(): void {
   // loaded the CSS in the common case, and this also corrects any unknown
   // stored id the inline script let through.
   document.documentElement.dataset.theme = theme;
+  applyFavicon(theme);
   ensureThemeCss(theme);
 }
 
@@ -80,6 +87,7 @@ export function applyTheme(id: string): void {
   ensureThemeCss(theme).then(() => {
     if (requestedTheme === theme) {
       document.documentElement.dataset.theme = theme;
+      applyFavicon(theme);
     }
   });
 }

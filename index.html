@@ -5,11 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light dark">
     <title>Ephemeral chat</title>
-    <link rel="icon" href="data:,">
+    <link
+      rel="icon"
+      id="favicon"
+      type="image/svg+xml"
+      href="/favicons/default.svg"
+    >
     <link rel="stylesheet" href="/styles.css">
     <script>
-      // Theme CSS is lazy: load only the saved theme before first paint.
-      // The id pattern must match THEME_ROUTE in server/static.ts.
+      // Theme CSS and favicon are lazy: load only the saved theme before
+      // first paint. The id pattern must match THEME_ROUTE/FAVICON_ROUTE in
+      // server/static.ts.
       (function () {
         try {
           var t = localStorage.getItem("theme");
@@ -19,6 +25,8 @@
               '<link rel="stylesheet" href="/themes/' + t +
                 '.css" data-theme-css="' + t + '">',
             );
+            document.getElementById("favicon").href = "/favicons/" + t +
+              ".svg";
           }
         } catch (_) {
           // Storage unavailable — the default theme needs no extra CSS.
