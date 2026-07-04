@@ -9,6 +9,7 @@
     "jsr:@std/internal@^1.0.12": "1.0.12",
     "jsr:@std/path@1": "1.1.4",
     "jsr:@std/path@^1.0.6": "1.1.4",
+    "npm:@resvg/resvg-wasm@2.6.2": "2.6.2",
     "npm:esbuild@0.20.2": "0.20.2",
     "npm:playwright@*": "1.61.1",
     "npm:playwright@^1.49.0": "1.61.1",
@@ -164,6 +165,9 @@
       "os": ["win32"],
       "cpu": ["x64"]
     },
+    "@resvg/resvg-wasm@2.6.2": {
+      "integrity": "sha512-FqALmHI8D4o6lk/LRWDnhw95z5eO+eAa6ORjVg09YRR7BkcM6oPHU9uyC0gtQG5vpFLvgpeU4+zEAz2H8APHNw=="
+    },
     "esbuild@0.20.2": {
       "integrity": "sha512-WdOOppmUNU+IbZ0PaDiTst80zjnrOkyJNHoKupIcVyU8Lvla3Ugx94VzkQ32Ijqd7UhHJy75gNWDMUekcrSJ6g==",
       "optionalDependencies": [
@@ -223,6 +227,7 @@
       "jsr:@std/assert@1",
       "jsr:@std/dotenv@~0.225.6",
       "jsr:@std/path@1",
+      "npm:@resvg/resvg-wasm@2.6.2",
       "npm:esbuild@0.20.2",
       "npm:playwright@^1.49.0",
       "npm:qrcode-generator@^1.4.4"

@@ -10,6 +10,7 @@
     "test": "deno test -A --permit-no-files client server shared scripts main_test.ts",
     "e2e:install": "deno run -A npm:playwright install chromium && deno task build",
     "e2e": "deno task build && deno test -A e2e",
+    "og-images": "deno run -A scripts/generate-og-images.ts",
     "pre-commit": "deno task check && deno task test",
     "pre-push": "deno task check && deno task test && deno task e2e"
   },
@@ -20,6 +21,7 @@
     "@std/dotenv": "jsr:@std/dotenv@^0.225.6",
     "esbuild": "npm:esbuild@0.20.2",
     "playwright": "npm:playwright@^1.49.0",
+    "@resvg/resvg-wasm": "npm:@resvg/resvg-wasm@2.6.2",
     "qrcode-generator": "npm:qrcode-generator@^1.4.4"
   }
 }
