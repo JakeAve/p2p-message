@@ -82,3 +82,57 @@ Deno.test("unknown theme names and malformed theme paths are not served", async 
     assertEquals(res, null, path);
   }
 });
+
+Deno.test("GET /og-images/default.png serves the default share-preview image", async () => {
+  const res = await handleStaticRequest(
+    new Request("http://localhost/og-images/default.png"),
+  );
+  assert(res !== null);
+  assertEquals(res.status, 200);
+  assertEquals(res.headers.get("content-type"), "image/png");
+  const body = new Uint8Array(await res.arrayBuffer());
+  assertEquals(
+    Array.from(body.slice(0, 8)),
+    [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+  );
+});
+
+Deno.test("GET /og-images/<id>.png serves every theme variant", async () => {
+  for (const id of ["90s", "banana", "gram", "whosapp"]) {
+    const res = await handleStaticRequest(
+      new Request(`http://localhost/og-images/${id}.png`),
+    );
+    assert(res !== null, id);
+    assertEquals(res.status, 200, id);
+    assertEquals(res.headers.get("content-type"), "image/png", id);
+    await res.body?.cancel();
+  }
+});
+
+Deno.test("unknown og-image names and malformed og-image paths are not served", async () => {
+  for (
+    const path of [
+      "/og-images/nope.png",
+      "/og-images/default.PNG",
+      "/og-images/default",
+      "/og-images/.png",
+      "/og-images/a/b.png",
+    ]
+  ) {
+    const res = await handleStaticRequest(
+      new Request(`http://localhost${path}`),
+    );
+    assertEquals(res, null, path);
+  }
+});
+
+Deno.test("index.html references /og-images/default.png as og:image", async () => {
+  const html = await Deno.readTextFile(
+    new URL("../index.html", import.meta.url),
+  );
+  assert(
+    html.includes(
+      '<meta property="og:image" content="/og-images/default.png">',
+    ),
+  );
+});

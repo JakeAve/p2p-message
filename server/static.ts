@@ -46,11 +46,24 @@ const THEME_ROUTE = /^\/themes\/([a-z0-9-]{1,32})\.css$/;
 /** /favicons/<id>.svg — same id shape, one wax-seal recolor per theme. */
 const FAVICON_ROUTE = /^\/favicons\/([a-z0-9-]{1,32})\.svg$/;
 
+/** /og-images/<id>.png — same id shape, one static share-preview image per theme. */
+const OG_IMAGE_ROUTE = /^\/og-images\/([a-z0-9-]{1,32})\.png$/;
+
 async function textAsset(
   relPath: string,
   contentType: string,
 ): Promise<Response> {
   const body = await Deno.readTextFile(new URL(relPath, repoRoot));
+  return new Response(body, {
+    headers: { "content-type": contentType, "cache-control": "no-cache" },
+  });
+}
+
+async function bytesAsset(
+  relPath: string,
+  contentType: string,
+): Promise<Response> {
+  const body = await Deno.readFile(new URL(relPath, repoRoot));
   return new Response(body, {
     headers: { "content-type": contentType, "cache-control": "no-cache" },
   });
@@ -125,6 +138,17 @@ export async function handleStaticRequest(
       return await textAsset(
         `client/favicons/${favicon[1]}.svg`,
         "image/svg+xml",
+      );
+    } catch {
+      return null; // registry/regex-shaped name but no such file
+    }
+  }
+  const ogImage = OG_IMAGE_ROUTE.exec(pathname);
+  if (ogImage) {
+    try {
+      return await bytesAsset(
+        `client/og-images/${ogImage[1]}.png`,
+        "image/png",
       );
     } catch {
       return null; // registry/regex-shaped name but no such file
