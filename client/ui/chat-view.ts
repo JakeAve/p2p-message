@@ -150,9 +150,7 @@ export function renderChatView(
   row.append(textarea, sendBtn);
   const meta = el("div", "composer-meta");
   const counter = el("span", "counter");
-  const ephemeralNote = el("span", "ephemeral-note");
-  ephemeralNote.textContent = "When the chat ends, everything is lost.";
-  meta.append(counter, ephemeralNote);
+  meta.append(counter);
   composer.append(row, meta);
 
   let composerEnabled = false;
@@ -221,7 +219,9 @@ export function renderChatView(
       statusCountdown.hidden = status.kind !== "reconnecting";
       if (status.kind === "reconnecting") {
         statusCountdown.textContent = `${
-          formatCountdown(status.msRemaining)
+          formatCountdown(
+            status.msRemaining,
+          )
         } left`;
         statusPill.setAttribute(
           "aria-label",

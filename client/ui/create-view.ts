@@ -48,7 +48,7 @@ export function renderCreateView(
   const card = el("div", "card stack");
 
   const title = el("h1");
-  title.textContent = "Send something sensitive, safely.";
+  title.textContent = "Send something safely.";
   const intro = el("p", "muted");
   intro.textContent =
     "Create a one-time link, send it to one person, and chat end-to-end " +
