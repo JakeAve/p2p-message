@@ -4,7 +4,15 @@
 export const WIDTH = 1200;
 export const HEIGHT = 630;
 export const MESSAGE = "You have been invited to a secure chat";
+export const MESSAGE_LINES = ["You have been", "invited to a", "secure chat"];
+if (MESSAGE_LINES.join(" ") !== MESSAGE) {
+  throw new Error(
+    "MESSAGE_LINES must join back into MESSAGE — keep them in sync",
+  );
+}
 const FONT_FAMILY = "DejaVu Sans";
+const FONT_SIZE = 108;
+const LINE_HEIGHT = 128;
 
 export interface Theme {
   id: string;
@@ -71,11 +79,18 @@ export const THEMES: Theme[] = [
 ];
 
 export function buildOgSvg(theme: Theme): string {
-  const message = escapeXml(theme.text ?? MESSAGE);
+  const lines = theme.text !== undefined ? [theme.text] : MESSAGE_LINES;
+  const blockHeight = (lines.length - 1) * LINE_HEIGHT;
+  const startY = HEIGHT / 2 - blockHeight / 2 + FONT_SIZE * 0.35;
+  const tspans = lines
+    .map((line, i) =>
+      `<tspan x="${WIDTH / 2}" y="${startY + i * LINE_HEIGHT}">${
+        escapeXml(line)
+      }</tspan>`
+    )
+    .join("");
   return `<svg width="${WIDTH}" height="${HEIGHT}" xmlns="http://www.w3.org/2000/svg">
   ${theme.background}
-  <text x="${WIDTH / 2}" y="${
-    HEIGHT / 2
-  }" text-anchor="middle" dominant-baseline="middle" font-family="${FONT_FAMILY}" font-weight="700" font-size="48" fill="${theme.textColor}">${message}</text>
+  <text text-anchor="middle" font-family="${FONT_FAMILY}" font-weight="700" font-size="${FONT_SIZE}" fill="${theme.textColor}">${tspans}</text>
 </svg>`;
 }

@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { buildOgSvg, MESSAGE, THEMES } from "./og-image-svg.ts";
+import { buildOgSvg, MESSAGE, MESSAGE_LINES, THEMES } from "./og-image-svg.ts";
 
 Deno.test("THEMES has exactly the five expected theme ids", () => {
   assertEquals(
@@ -8,10 +8,16 @@ Deno.test("THEMES has exactly the five expected theme ids", () => {
   );
 });
 
-Deno.test("buildOgSvg embeds the exact invite message for every theme", () => {
+Deno.test("MESSAGE_LINES joins back into the exact invite message", () => {
+  assertEquals(MESSAGE_LINES.join(" "), MESSAGE);
+});
+
+Deno.test("buildOgSvg embeds every message line for every theme", () => {
   for (const theme of THEMES) {
     const svg = buildOgSvg(theme);
-    assertStringIncludes(svg, MESSAGE);
+    for (const line of MESSAGE_LINES) {
+      assertStringIncludes(svg, line);
+    }
   }
 });
 
