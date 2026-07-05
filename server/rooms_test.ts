@@ -289,7 +289,7 @@ Deno.test("invite window is clamped: below-min create expires at 30s", () => {
   assertEquals(registry.roomCount, 0);
 });
 
-Deno.test("creator drop in waiting: room closes immediately, invite timer cleared", () => {
+Deno.test("creator drop in waiting: room survives, invite timer keeps running", () => {
   const clock = new FakeClock();
   const registry = makeRegistry(clock);
   const creator = new FakeLink();
@@ -297,12 +297,97 @@ Deno.test("creator drop in waiting: room closes immediately, invite timer cleare
   assert(created.ok);
   if (!created.ok) return;
   registry.disconnect(ROOM_A, created.peerId);
+  assertEquals(registry.roomCount, 1);
+  assertEquals(registry.stateOf(ROOM_A), "waiting");
+  assertEquals(clock.pendingTimers, 1); // invite countdown untouched
+  assertEquals(creator.sent, []); // nobody left to notify
+});
+
+Deno.test("join into a 0-socket waiting room: empty participants, still waiting", () => {
+  const clock = new FakeClock();
+  const registry = makeRegistry(clock);
+  const created = registry.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(created.ok);
+  if (!created.ok) return;
+  registry.disconnect(ROOM_A, created.peerId);
+  const friend = new FakeLink();
+  const joined = registry.join(ROOM_A, friend);
+  assert(joined.ok);
+  if (!joined.ok) return;
+  assertEquals(joined.participants, []);
+  assertEquals(registry.stateOf(ROOM_A), "waiting");
+  assertEquals(friend.sent, []); // no peer-joined broadcast to the newcomer
+});
+
+Deno.test("creator rejoin pairs the room, stops the invite countdown, notifies the waiting joiner", () => {
+  const clock = new FakeClock();
+  const registry = makeRegistry(clock);
+  const created = registry.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(created.ok);
+  if (!created.ok) return;
+  registry.disconnect(ROOM_A, created.peerId);
+  const friend = new FakeLink();
+  const friendJoin = registry.join(ROOM_A, friend);
+  assert(friendJoin.ok);
+  if (!friendJoin.ok) return;
+  const back = new FakeLink();
+  const rejoined = registry.join(ROOM_A, back);
+  assert(rejoined.ok);
+  if (!rejoined.ok) return;
+  assertEquals(registry.stateOf(ROOM_A), "paired");
+  assertEquals(clock.pendingTimers, 0); // invite countdown stopped by pairing
+  assertEquals(rejoined.participants, [friendJoin.peerId]);
+  assertEquals(friend.sent, [{ type: "peer-joined", peerId: rejoined.peerId }]);
+});
+
+Deno.test("invite expiry closes a 0-socket waiting room", () => {
+  const clock = new FakeClock();
+  const registry = makeRegistry(clock);
+  const created = registry.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(created.ok);
+  if (!created.ok) return;
+  registry.disconnect(ROOM_A, created.peerId);
+  clock.advance(600_000);
   assertEquals(registry.roomCount, 0);
   assertEquals(clock.pendingTimers, 0);
-  assertEquals(creator.sent, []); // nobody to notify; socket already gone
-  const late = registry.join(ROOM_A, new FakeLink());
-  assertFalse(late.ok);
-  if (!late.ok) assertEquals(late.code, "room-not-found");
+});
+
+Deno.test("waiting joiner drop: room stays waiting until expiry", () => {
+  const clock = new FakeClock();
+  const registry = makeRegistry(clock);
+  const created = registry.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(created.ok);
+  if (!created.ok) return;
+  registry.disconnect(ROOM_A, created.peerId);
+  const friend = new FakeLink();
+  const joined = registry.join(ROOM_A, friend);
+  assert(joined.ok);
+  if (!joined.ok) return;
+  registry.disconnect(ROOM_A, joined.peerId); // friend leaves too
+  assertEquals(registry.stateOf(ROOM_A), "waiting");
+  assertEquals(clock.pendingTimers, 1); // still only the invite countdown
+  clock.advance(600_000);
+  assertEquals(registry.roomCount, 0);
+});
+
+Deno.test("invite expiry closes a waiting room holding a lone joiner", () => {
+  const clock = new FakeClock();
+  const registry = makeRegistry(clock);
+  const created = registry.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(created.ok);
+  if (!created.ok) return;
+  registry.disconnect(ROOM_A, created.peerId);
+  clock.advance(60_000);
+  const friend = new FakeLink();
+  const joined = registry.join(ROOM_A, friend);
+  assert(joined.ok);
+  clock.advance(540_000); // t = 600_000: original invite deadline, never reset
+  assertEquals(registry.roomCount, 0);
+  assertEquals(friend.sent, [{
+    type: "room-closed",
+    reason: "invite-expired",
+  }]);
+  assert(friend.closed);
 });
 
 // ---------- timers: grace ----------

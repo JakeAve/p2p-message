@@ -187,9 +187,11 @@ export class RoomRegistry {
 
     switch (room.state) {
       case "waiting":
-        // Creator must keep the tab open during waiting (spec §1/§5):
-        // creator drop closes the room immediately. Nobody left to notify.
-        this.#deleteRoom(room);
+        // Leave-the-page invites: a waiting room survives socket loss with
+        // the same zero-socket posture as "grace". The invite countdown
+        // keeps running and still closes the room at expiry; rejoin is by
+        // token possession (plain join). "waiting" holds at most one
+        // socket, so there is never anyone left to notify here.
         break;
       case "paired": {
         // First drop while the other peer remains: start the single
