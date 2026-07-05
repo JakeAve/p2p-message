@@ -119,6 +119,10 @@ export class Session {
   private graceTimer: number | null = null;
   private rejoinTimer: number | null = null;
 
+  // Waiting-phase rejoin (leave-the-page invites): local bound on retries.
+  private waitingDeadline = 0;
+  private waitingRejoin = false;
+
   constructor(opts: SessionOptions, deps: SessionDeps = {}) {
     this.opts = opts;
     this.timers = deps.timers ?? realTimers;
@@ -236,11 +240,14 @@ export class Session {
     if (this._status === "ended") return;
     switch (e.type) {
       case "created":
+        this.waitingDeadline = this.timers.now() +
+          (this.opts.inviteWindowMs ?? DEFAULT_INVITE_WINDOW_MS);
         this.setStatus("waiting-for-peer");
         this.ackStart();
         break;
       case "joined":
         this.graceDurationMs = e.graceDurationMs;
+        this.waitingRejoin = false;
         this.ackStart();
         break;
       case "peer-joined":
@@ -274,6 +281,11 @@ export class Session {
           this.enterGrace(true);
         } else if (this._status === "reconnecting") {
           this.scheduleRejoin();
+        } else if (this._status === "waiting-for-peer") {
+          // Leave-the-page invites: the room outlives our socket during
+          // the invite window — rejoin by token possession, silently.
+          this.waitingRejoin = true;
+          this.rejoinOrExpire();
         } else {
           this.finish("signaling-lost");
         }
@@ -284,9 +296,12 @@ export class Session {
   private handleServerError(code: ErrorCode): void {
     let reason: EndReason;
     if (code === "room-not-found") {
-      // On a grace rejoin, "not found" means the room died while we were away.
+      // On a rejoin, "not found" means the room died while we were away:
+      // grace-expired for a paired room, invite-expired for a waiting one.
       reason = this._status === "reconnecting"
         ? "grace-expired"
+        : this.waitingRejoin
+        ? "invite-expired"
         : "room-not-found";
     } else if (code === "room-full" || code === "room-exists") {
       reason = "room-full";
@@ -502,19 +517,35 @@ export class Session {
     if (this.rejoinTimer !== null) return;
     this.rejoinTimer = this.timers.setTimeout(() => {
       this.rejoinTimer = null;
-      this.attemptRejoin();
+      if (this.waitingRejoin) this.rejoinOrExpire();
+      else this.attemptRejoin();
     }, REJOIN_RETRY_MS);
+  }
+
+  /** Waiting-phase retry gate: give up at the local invite deadline. */
+  private rejoinOrExpire(): void {
+    if (this.timers.now() >= this.waitingDeadline) {
+      this.finish("invite-expired");
+      return;
+    }
+    this.attemptRejoin();
+  }
+
+  /** A rejoin is live during grace, or during a waiting-phase drop. */
+  private rejoinAllowed(): boolean {
+    return this._status === "reconnecting" ||
+      (this._status === "waiting-for-peer" && this.waitingRejoin);
   }
 
   private attemptRejoin(): void {
     void this.transport.connect().then(
       () => {
-        if (this._status === "reconnecting") {
+        if (this.rejoinAllowed()) {
           this.transport.joinRoom(this.roomId);
         }
       },
       () => {
-        if (this._status === "reconnecting") {
+        if (this.rejoinAllowed()) {
           this.scheduleRejoin();
         }
       },

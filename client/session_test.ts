@@ -171,15 +171,41 @@ Deno.test("room-closed while waiting maps 1:1 to EndReason", async () => {
   );
 });
 
-Deno.test("signaling loss while waiting-for-peer ends with signaling-lost", async () => {
-  const { session, transport } = makeCreator();
+Deno.test("signaling loss while waiting-for-peer: silent rejoin, session not ended", async () => {
+  const { session, transport, fragmentSecret } = makeCreator();
   const events = collect(session);
   await session.start();
+  transport.respondToJoin = [{
+    type: "joined",
+    peerId: "creator-peer-2",
+    participants: [],
+    graceDurationMs: 120_000,
+  }];
   transport.emit({ type: "signaling-lost" });
   await flushAsync();
-  assert(
-    events.some((e) => e.type === "ended" && e.reason === "signaling-lost"),
-  );
+  const token = await derivePathToken(fragmentSecret);
+  assert(transport.calls.includes(`join:${token}`)); // rejoined by token possession
+  assertEquals(session.status, "waiting-for-peer"); // no status churn, no ended
+  assert(!events.some((e) => e.type === "ended"));
+});
+
+Deno.test("waiting rejoin answered with room-not-found ends with invite-expired", async () => {
+  const { session, transport } = makeCreator();
+  await session.start();
+  transport.respondToJoin = [{ type: "server-error", code: "room-not-found" }];
+  const ended = waitForEvent(session, "ended");
+  transport.emit({ type: "signaling-lost" });
+  assertEquals((await ended).reason, "invite-expired");
+});
+
+Deno.test("unreachable server past the invite deadline ends with invite-expired", async () => {
+  const { session, transport, timers } = makeCreator();
+  await session.start();
+  transport.connectError = new Error("network down");
+  const ended = waitForEvent(session, "ended", 30_000);
+  transport.emit({ type: "signaling-lost" });
+  await timers.tick(DEFAULT_INVITE_WINDOW_MS + REJOIN_RETRY_MS);
+  assertEquals((await ended).reason, "invite-expired");
 });
 
 Deno.test("sendChat throws SendUnavailableError unless status is secure — and nothing is queued", async () => {
