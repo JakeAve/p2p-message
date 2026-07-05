@@ -611,3 +611,35 @@ Deno.test("joiner uses the server-provided graceDurationMs for its countdown", a
   pair.b.end();
   await flushAsync();
 });
+
+Deno.test("wake() retries a pending waiting rejoin immediately", async () => {
+  const { session, transport } = makeCreator();
+  await session.start();
+  transport.connectError = new Error("network down");
+  transport.emit({ type: "signaling-lost" });
+  await flushAsync(); // failed attempt → retry parked on the 2s timer
+  const connectsBefore = transport.calls.filter((c) => c === "connect").length;
+  transport.connectError = null;
+  transport.respondToJoin = [{
+    type: "joined",
+    peerId: "creator-peer-2",
+    participants: [],
+    graceDurationMs: 120_000,
+  }];
+  session.wake(); // no timer tick — visibilitychange path
+  await flushAsync();
+  assert(
+    transport.calls.filter((c) => c === "connect").length > connectsBefore,
+    "wake() should reconnect without waiting for the retry timer",
+  );
+  assertEquals(session.status, "waiting-for-peer");
+});
+
+Deno.test("wake() with no pending retry is a no-op", async () => {
+  const { session, transport } = makeCreator();
+  await session.start();
+  const callsBefore = transport.calls.length;
+  session.wake();
+  await flushAsync();
+  assertEquals(transport.calls.length, callsBefore);
+});

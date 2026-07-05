@@ -210,6 +210,19 @@ export class Session {
     this.finish("you-ended", false);
   }
 
+  /**
+   * Retry a parked rejoin immediately. The UI calls this when the tab
+   * becomes visible again — background tabs throttle timers, so the
+   * 2 s retry loop may not have fired while the user was away.
+   */
+  wake(): void {
+    if (this._status === "ended" || this.rejoinTimer === null) return;
+    this.timers.clearTimeout(this.rejoinTimer);
+    this.rejoinTimer = null;
+    if (this.waitingRejoin) this.rejoinOrExpire();
+    else this.attemptRejoin();
+  }
+
   // --- internals ---
 
   private enqueue(e: TransportEvent): void {
