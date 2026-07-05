@@ -9,7 +9,7 @@ export interface ShareView {
 /**
  * Spec §10.2 — full-screen share overlay APPENDED over the (empty) chat.
  * Full link + copy button + client-side QR + invite countdown + the pinned
- * keep-tab-open line. `destroy()` removes it and stops the countdown.
+ * free-to-leave line. `destroy()` removes it and stops the countdown.
  */
 export function renderShareView(
   root: HTMLElement,
@@ -57,7 +57,9 @@ export function renderShareView(
   countdownLine.append("Invite expires in ", countdown);
 
   const keepOpen = el("p", "keep-open");
-  keepOpen.textContent = "Keep this tab open until the other person joins.";
+  keepOpen.textContent =
+    "You can switch apps to send the link — the invite stays live until " +
+    "the countdown ends.";
 
   card.append(title, intro, linkRow, qr, countdownLine, keepOpen);
   overlay.append(card);

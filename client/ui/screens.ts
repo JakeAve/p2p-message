@@ -52,8 +52,7 @@ export function screenForEndReason(reason: EndReason): Screen {
       return {
         title: "This link isn't active",
         body: "It may have expired, already been used, or the chat may be " +
-          "over. Rooms exist only while their tabs are open — nothing was " +
-          "stored.",
+          "over. Nothing was stored.",
         startNew: true,
       };
     case "room-full":

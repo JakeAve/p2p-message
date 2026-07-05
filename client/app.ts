@@ -57,6 +57,13 @@ function runSession(
   let shareView: ShareView | null = share ? renderShareView(root, share) : null;
   let hadSecure = false;
 
+  // Background tabs throttle timers; retry a parked rejoin the moment the
+  // tab is visible again (leave-the-page invites).
+  const onVisibility = () => {
+    if (document.visibilityState === "visible") session.wake();
+  };
+  document.addEventListener("visibilitychange", onVisibility);
+
   session.on((event) => {
     switch (event.type) {
       case "status":
@@ -70,6 +77,10 @@ function runSession(
         }
         if (event.status === "securing") {
           chat.setStatus({ kind: "securing" });
+          chat.setComposerEnabled(false);
+        }
+        if (event.status === "waiting-for-peer") {
+          chat.setStatus({ kind: "waiting" });
           chat.setComposerEnabled(false);
         }
         break;
@@ -103,6 +114,7 @@ function runSession(
         chat.setComposerEnabled(false);
         break;
       case "ended":
+        document.removeEventListener("visibilitychange", onVisibility);
         shareView?.destroy();
         shareView = null;
         chat.destroy();

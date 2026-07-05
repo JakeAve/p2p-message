@@ -27,7 +27,10 @@ first can join the room as if they were the intended recipient. No link-based,
 account-free scheme can fully prevent this — so send the link over a channel you
 trust, and keep the invite window short. The app fails closed: a full room
 rejects any further join attempt rather than letting a third person in or
-replacing a peer.
+replacing a peer. And because an invite now survives the creator stepping away
+briefly, two people who both hold the link could connect to each other while the
+creator is gone — if you come back to a full room, treat the link as used and
+start a fresh one.
 
 **What the safety code is for.** Once connected, both people see the same
 6-digit code, derived from the encryption handshake. "Both of you should see the

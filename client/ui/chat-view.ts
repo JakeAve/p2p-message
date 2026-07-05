@@ -13,7 +13,7 @@ export interface ChatMessage {
 }
 
 export type ChatStatus =
-  | { kind: "connecting" | "securing" | "secure" }
+  | { kind: "connecting" | "securing" | "secure" | "waiting" }
   | { kind: "reconnecting"; msRemaining: number };
 
 export interface ChatViewController {
@@ -260,6 +260,13 @@ export function renderChatView(
           "Connection status: securing. Click for details.",
         );
         statusHint.textContent = "Setting up end-to-end encryption…";
+      } else if (status.kind === "waiting") {
+        statusPill.setAttribute(
+          "aria-label",
+          "Connection status: waiting for the other person. Click for details.",
+        );
+        statusHint.textContent = "The other person isn't here yet. " +
+          "You can switch apps — this page reconnects when you return.";
       } else {
         statusPill.setAttribute(
           "aria-label",

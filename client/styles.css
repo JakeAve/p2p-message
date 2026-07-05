@@ -401,6 +401,7 @@ h1 {
 }
 
 .status-pill.connecting .status-dot,
+.status-pill.waiting .status-dot,
 .status-pill.securing .status-dot {
   background: var(--warn);
   animation: status-pulse 1.6s ease-in-out infinite;
