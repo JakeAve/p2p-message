@@ -21,7 +21,7 @@ import {
   WIRE_VERSION,
   WireError,
 } from "../shared/wire.ts";
-import type { ErrorCode } from "../shared/protocol.ts";
+import { type ErrorCode, INVITE_WINDOW_MAX_MS } from "../shared/protocol.ts";
 import {
   realTimers,
   type TimerApi,
@@ -248,6 +248,19 @@ export class Session {
       case "joined":
         this.graceDurationMs = e.graceDurationMs;
         this.waitingRejoin = false;
+        if (
+          e.participants.length === 0 &&
+          (this._status === "connecting" ||
+            this._status === "waiting-for-peer")
+        ) {
+          // The other side is away (leave-the-page invites): wait for them.
+          // A joiner never learns the room's real invite deadline (creator
+          // config), so its retry bound is the protocol maximum.
+          if (this.waitingDeadline === 0) {
+            this.waitingDeadline = this.timers.now() + INVITE_WINDOW_MAX_MS;
+          }
+          this.setStatus("waiting-for-peer");
+        }
         this.ackStart();
         break;
       case "peer-joined":

@@ -33,6 +33,7 @@ import {
   ManualTimers,
   openData,
 } from "./test-fakes.ts";
+import { INVITE_WINDOW_MAX_MS } from "../shared/protocol.ts";
 
 function collect(session: Session): SessionEvent[] {
   const events: SessionEvent[] = [];
@@ -205,6 +206,44 @@ Deno.test("unreachable server past the invite deadline ends with invite-expired"
   const ended = waitForEvent(session, "ended", 30_000);
   transport.emit({ type: "signaling-lost" });
   await timers.tick(DEFAULT_INVITE_WINDOW_MS + REJOIN_RETRY_MS);
+  assertEquals((await ended).reason, "invite-expired");
+});
+
+Deno.test("joiner landing in an empty room enters waiting-for-peer", async () => {
+  const transport = new FakeTransport();
+  transport.respondToJoin = [{
+    type: "joined",
+    peerId: "joiner-peer",
+    participants: [],
+    graceDurationMs: 120_000,
+  }];
+  const { session } = makeJoiner(transport);
+  const events = collect(session);
+  await session.start();
+  assertEquals(session.status, "waiting-for-peer");
+  assert(
+    events.some((e) => e.type === "status" && e.status === "waiting-for-peer"),
+  );
+});
+
+Deno.test("waiting joiner gives up after the INVITE_WINDOW_MAX_MS backstop", async () => {
+  const transport = new FakeTransport();
+  transport.respondToJoin = [{
+    type: "joined",
+    peerId: "joiner-peer",
+    participants: [],
+    graceDurationMs: 120_000,
+  }];
+  const timers = new ManualTimers();
+  const { session } = makeJoiner(transport, timers);
+  await session.start();
+  transport.connectError = new Error("network down");
+  // This tick drives ~1800 two-second retry cycles through ManualTimers
+  // (each with a flushAsync), which takes real seconds — hence the large
+  // waitForEvent timeout.
+  const ended = waitForEvent(session, "ended", 60_000);
+  transport.emit({ type: "signaling-lost" });
+  await timers.tick(INVITE_WINDOW_MAX_MS + REJOIN_RETRY_MS);
   assertEquals((await ended).reason, "invite-expired");
 });
 
@@ -519,6 +558,22 @@ Deno.test("rejoin answered with room-not-found ends with grace-expired", async (
   pair.tb.emit({ type: "signaling-lost" });
   assertEquals((await ended).reason, "grace-expired");
   pair.a.end();
+  await flushAsync();
+});
+
+Deno.test("grace rejoin answered with empty participants stays reconnecting", async () => {
+  const pair = await makeSecurePair();
+  pair.tb.respondToJoin = [{
+    type: "joined",
+    peerId: "joiner-peer-2",
+    participants: [],
+    graceDurationMs: 120_000,
+  }];
+  pair.tb.emit({ type: "signaling-lost" });
+  await flushAsync();
+  assertEquals(pair.b.status, "reconnecting"); // grace countdown still rules
+  pair.a.end();
+  pair.b.end();
   await flushAsync();
 });
 
