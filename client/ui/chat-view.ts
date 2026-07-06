@@ -64,7 +64,7 @@ export function renderChatView(
     safetyToggle.setAttribute("aria-expanded", String(open));
   };
   safetyToggle.addEventListener("click", () => {
-    setSafetyOpen(safetyPopover.hidden);
+    setSafetyOpen(!!safetyPopover.hidden);
   });
   // Light dismiss: click anywhere else or Escape closes the popover.
   const onDocumentClick = (event: MouseEvent) => {
@@ -108,7 +108,7 @@ export function renderChatView(
     statusPill.setAttribute("aria-expanded", String(open));
   };
   statusPill.addEventListener("click", () => {
-    setStatusOpen(statusPopover.hidden);
+    setStatusOpen(!!statusPopover.hidden);
   });
   status.append(statusPill, statusCountdown, statusPopover);
 

@@ -13,6 +13,18 @@
  * scheme): username is the expiry unix timestamp, credential is
  * base64(HMAC-SHA1(secret, username)). coturn re-derives and validates the
  * same HMAC, so the secret never leaves the server.
+ *
+ * Alternatively, set these to use Cloudflare's managed Realtime TURN
+ * service (pay-per-GB, no self-hosted coturn needed) instead of the above:
+ *
+ *   CLOUDFLARE_TURN_KEY_ID=<Turn Key ID from the Cloudflare dashboard>
+ *   CLOUDFLARE_TURN_TOKEN=<Turn Key API Token>
+ *   CLOUDFLARE_TURN_TTL=86400
+ *
+ * When set, these take priority over ICE_TURN_SERVERS/TURN_STATIC_SECRET:
+ * we call Cloudflare's credentials.generate endpoint per request to mint a
+ * short-lived username/credential pair, so no shared secret is embedded in
+ * this app.
  */
 
 export interface TurnCredentials {
@@ -47,6 +59,45 @@ export async function getTurnCredentials(
   return { username, credential };
 }
 
+interface CloudflareTurnResponse {
+  iceServers: RTCIceServer[];
+}
+
+/**
+ * Mints short-lived STUN+TURN credentials via Cloudflare's Realtime API.
+ * The generate-ice-servers endpoint returns an array of RTCIceServer entries
+ * ready to pass straight to RTCPeerConnection, including Cloudflare's own
+ * STUN server — so callers should use this array as-is, not merge it with
+ * a separately configured STUN entry.
+ */
+export async function getCloudflareTurnCredentials(): Promise<RTCIceServer[]> {
+  const keyId = Deno.env.get("CLOUDFLARE_TURN_KEY_ID");
+  const token = Deno.env.get("CLOUDFLARE_TURN_TOKEN");
+  if (!keyId || !token) {
+    throw new Error("CLOUDFLARE_TURN_KEY_ID/CLOUDFLARE_TURN_TOKEN are not set");
+  }
+  const ttl = Number(Deno.env.get("CLOUDFLARE_TURN_TTL") ?? "86400");
+  const res = await fetch(
+    `https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate-ice-servers`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ttl }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Cloudflare TURN credential request failed: ${res.status} ${await res
+        .text()}`,
+    );
+  }
+  const { iceServers }: CloudflareTurnResponse = await res.json();
+  return iceServers;
+}
+
 function parseUrlList(value: string | undefined): string[] {
   return (value ?? "")
     .split(",")
@@ -61,6 +112,13 @@ const DEFAULT_STUN_URLS = [
 ];
 
 export async function getIceServers(): Promise<{ iceServers: RTCIceServer[] }> {
+  if (
+    Deno.env.get("CLOUDFLARE_TURN_KEY_ID") &&
+    Deno.env.get("CLOUDFLARE_TURN_TOKEN")
+  ) {
+    return { iceServers: await getCloudflareTurnCredentials() };
+  }
+
   const iceServers: RTCIceServer[] = [];
 
   const stunUrls = parseUrlList(Deno.env.get("ICE_STUN_SERVERS"));

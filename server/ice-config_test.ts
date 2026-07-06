@@ -6,6 +6,9 @@ const ENV_KEYS = [
   "ICE_TURN_SERVERS",
   "TURN_STATIC_SECRET",
   "TURN_CREDENTIAL_TTL",
+  "CLOUDFLARE_TURN_KEY_ID",
+  "CLOUDFLARE_TURN_TOKEN",
+  "CLOUDFLARE_TURN_TTL",
 ] as const;
 
 async function withEnv(
@@ -111,4 +114,88 @@ Deno.test("getTurnCredentials throws without TURN_STATIC_SECRET", async () => {
   await withEnv({}, async () => {
     await assertRejects(() => getTurnCredentials(3600), Error);
   });
+});
+
+Deno.test("Cloudflare TURN configured: calls generate-ice-servers and takes priority over coturn env", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestedUrl: string | undefined;
+  let requestedInit: RequestInit | undefined;
+  globalThis.fetch = ((url: string | URL, init?: RequestInit) => {
+    requestedUrl = String(url);
+    requestedInit = init;
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          iceServers: [{
+            urls: [
+              "stun:stun.cloudflare.com:3478",
+              "turn:turn.cloudflare.com:3478?transport=udp",
+              "turn:turn.cloudflare.com:3478?transport=tcp",
+              "turns:turn.cloudflare.com:5349?transport=tcp",
+            ],
+            username: "cf-user",
+            credential: "cf-cred",
+          }],
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+
+  try {
+    await withEnv(
+      {
+        ICE_STUN_SERVERS: "stun:should-be-ignored.example.com:19302",
+        ICE_TURN_SERVERS: "turn:should-be-ignored.example.com:3478",
+        TURN_STATIC_SECRET: "a".repeat(32),
+        CLOUDFLARE_TURN_KEY_ID: "key-id",
+        CLOUDFLARE_TURN_TOKEN: "token",
+        CLOUDFLARE_TURN_TTL: "600",
+      },
+      async () => {
+        const { iceServers } = await getIceServers();
+        assertEquals(iceServers, [{
+          urls: [
+            "stun:stun.cloudflare.com:3478",
+            "turn:turn.cloudflare.com:3478?transport=udp",
+            "turn:turn.cloudflare.com:3478?transport=tcp",
+            "turns:turn.cloudflare.com:5349?transport=tcp",
+          ],
+          username: "cf-user",
+          credential: "cf-cred",
+        }]);
+      },
+    );
+    assertEquals(
+      requestedUrl,
+      "https://rtc.live.cloudflare.com/v1/turn/keys/key-id/credentials/generate-ice-servers",
+    );
+    assertEquals(requestedInit?.method, "POST");
+    assertEquals(
+      (requestedInit?.headers as Record<string, string>)["Authorization"],
+      "Bearer token",
+    );
+    assertEquals(JSON.parse(requestedInit?.body as string), { ttl: 600 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("Cloudflare TURN request failure: rejects with status and body", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response("bad token", { status: 401 }),
+    )) as typeof fetch;
+
+  try {
+    await withEnv(
+      { CLOUDFLARE_TURN_KEY_ID: "key-id", CLOUDFLARE_TURN_TOKEN: "bad-token" },
+      async () => {
+        await assertRejects(() => getIceServers(), Error, "401");
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
