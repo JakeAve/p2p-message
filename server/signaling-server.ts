@@ -217,7 +217,7 @@ export function createSignalingHandler(
   };
 }
 
-function parseOptionalMs(value: string | undefined): number | undefined {
+export function parseOptionalMs(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;

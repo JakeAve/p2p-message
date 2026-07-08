@@ -3,6 +3,7 @@ import {
   createDefaultLimiters,
   createSignalingHandler,
   hashRoomId,
+  parseOptionalMs,
 } from "./signaling-server.ts";
 import { RoomRegistry } from "./rooms.ts";
 import type { ClientMessage, ServerMessage } from "../shared/protocol.ts";
@@ -20,6 +21,19 @@ Deno.test("hashRoomId: sha256 hex truncated to 8 chars, never the raw token", as
   //   echo -n "RRRRRRRRRRRRRRRRRRRRRR" | shasum -a 256 | cut -c1-8
   const other = await hashRoomId("A".repeat(22));
   assert(h !== other);
+});
+
+Deno.test("parseOptionalMs: parses valid numeric strings, rejects missing/empty/garbage without producing NaN", () => {
+  assertEquals(parseOptionalMs(undefined), undefined);
+  assertEquals(parseOptionalMs(""), undefined);
+  const garbage = parseOptionalMs("garbage");
+  assertEquals(garbage, undefined);
+  assert(!Number.isNaN(garbage)); // the guard must reject, never leak NaN through
+  assertEquals(parseOptionalMs("3600000"), 3_600_000);
+  // "0" is a non-empty string, so `!value` is false and it is NOT caught by the
+  // falsy guard; Number.isFinite(0) is true, so it must parse to the number 0
+  // (not be rejected as if it were falsy).
+  assertEquals(parseOptionalMs("0"), 0);
 });
 
 // ---------- integration harness ----------

@@ -656,6 +656,36 @@ Deno.test("join: recovers a paired room into grace using ROOM_RECOVERY_MAX_AGE_M
   assertEquals(fresh.roomCount, 0);
 });
 
+Deno.test("join: rejects a paired room's recovery once past ROOM_RECOVERY_MAX_AGE_MS", () => {
+  const clock = new FakeClock();
+  const origin = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+    recoveryMaxAgeMs: 3_600_000, // 1h, short so we can exceed it directly
+  });
+  const created = origin.create(ROOM_A, 30_000, 120_000, new FakeLink());
+  assert(created.ok);
+  const joined = origin.join(ROOM_A, new FakeLink());
+  assert(joined.ok);
+  const pairedToken = joined.recoveryToken!;
+  const payload = verifyRecoveryToken(pairedToken, RECOVERY_SECRET);
+  assert(payload !== null && payload.pairedAt !== null);
+
+  clock.advance(3_600_001); // past recoveryMaxAgeMs since pairedAt
+
+  const fresh = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+    recoveryMaxAgeMs: 3_600_000,
+  });
+  const recovered = fresh.join(ROOM_A, new FakeLink(), pairedToken);
+  assertFalse(recovered.ok);
+  if (!recovered.ok) {
+    assertEquals(recovered.code, "room-not-found");
+  }
+  // No room should have been synthesized at all — rejection happens before
+  // any insertion, not "synthesized then immediately expired".
+  assertEquals(fresh.roomCount, 0);
+});
+
 Deno.test("join: rejects recovery on bad signature or mismatched roomId", () => {
   const clock = new FakeClock();
   const origin = makeRegistry(clock, undefined, {
