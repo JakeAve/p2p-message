@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import {
   formatCountdown,
+  formatMessageTime,
   MAX_MESSAGE_BYTES,
   utf8ByteLength,
 } from "./format.ts";
@@ -28,4 +29,11 @@ Deno.test("formatCountdown renders m:ss under an hour, h:mm:ss above", () => {
   assertEquals(formatCountdown(600_000), "10:00"); // 10-min invite starts at 10:00
   assertEquals(formatCountdown(3_600_000), "1:00:00");
   assertEquals(formatCountdown(5_432_100), "1:30:33"); // ceil(5432.1s) = 5433s
+});
+
+Deno.test("formatMessageTime renders hour and minute for the given locale", () => {
+  // new Date(y, m, d, h, min) is local time, so no TZ dependence here.
+  const t = new Date(2026, 6, 8, 15, 42).getTime();
+  assertEquals(formatMessageTime(t, "en-US"), "3:42 PM");
+  assertEquals(formatMessageTime(t, "de-DE"), "15:42");
 });

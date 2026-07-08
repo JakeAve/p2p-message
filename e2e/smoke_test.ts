@@ -168,6 +168,22 @@ Deno.test(
         "both peers must display the same safety code",
       );
 
+      // --- Typing: A composes, B sees the dots; A clears, they vanish ---
+      await pageA.fill('[data-e2e="composer"]', "warming up…", {
+        timeout: UI_TIMEOUT_MS,
+      });
+      await pageB.waitForSelector('[data-e2e="typing-indicator"]', {
+        state: "visible",
+        timeout: UI_TIMEOUT_MS,
+      });
+      await pageA.fill('[data-e2e="composer"]', "", {
+        timeout: UI_TIMEOUT_MS,
+      });
+      await pageB.waitForSelector('[data-e2e="typing-indicator"]', {
+        state: "hidden",
+        timeout: UI_TIMEOUT_MS,
+      });
+
       // --- Chat A -> B ---
       const messageText = `hello from A ${crypto.randomUUID()}`;
       await pageA.fill('[data-e2e="composer"]', messageText, {
@@ -179,6 +195,28 @@ Deno.test(
         .filter({ hasText: messageText })
         .first()
         .waitFor({ state: "attached", timeout: UI_TIMEOUT_MS });
+
+      // --- Delivery: the label under A's message reaches "Delivered" ---
+      await pageA.waitForFunction(
+        () =>
+          document.querySelector('[data-e2e="delivery-label"]')
+            ?.textContent === "Delivered",
+        undefined,
+        { timeout: UI_TIMEOUT_MS },
+      );
+
+      // --- Tap reveal: clicking A's sent bubble shows time · Delivered ---
+      await pageA
+        .locator('[data-e2e="message"]')
+        .filter({ hasText: messageText })
+        .first()
+        .click();
+      const reveal = await readText(pageA, '[data-e2e="msg-reveal"]');
+      assertMatch(reveal, /\d{1,2}:\d{2}/); // a clock time is present
+      assert(
+        reveal.endsWith("Delivered"),
+        `reveal should end with Delivered: "${reveal}"`,
+      );
 
       // --- A ends the chat; B lands on the ended screen ---
       await pageA.click('[data-e2e="end-chat"]', { timeout: UI_TIMEOUT_MS });
