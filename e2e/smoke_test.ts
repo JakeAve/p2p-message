@@ -294,3 +294,103 @@ Deno.test(
     }
   },
 );
+
+Deno.test(
+  "recovery: page reload after instance replacement recovers via the URL-embedded token",
+  async () => {
+    // Closes a gap the previous test doesn't cover: that test proves
+    // automatic same-tab rejoin (the in-memory recovery token, still held by
+    // the live Session object). This test proves the OTHER persistence path
+    // from the design (§3, "Path B") — a genuinely fresh page load has no
+    // in-memory Session at all, so if it recovers after the server process
+    // has already been replaced, it can only be via the recovery token
+    // embedded in the URL's ?rc= param, patched into the address bar by
+    // history.replaceState (client/app.ts's "recovery-token" handler).
+    const port = freePort();
+    const secret = "e2e-test-recovery-secret-reload";
+    let server = await startServer({ port, roomRecoverySecret: secret });
+    const browser = await chromium.launch();
+    let contextA: BrowserContext | undefined;
+    let contextB: BrowserContext | undefined;
+    try {
+      contextA = await browser.newContext();
+      const pageA = await contextA.newPage();
+      await pageA.goto(`${server.baseUrl}/`);
+      await pageA.click('input[name="grace"][value="30000"]', {
+        timeout: UI_TIMEOUT_MS,
+      });
+      await pageA.click('[data-e2e="create"]', { timeout: UI_TIMEOUT_MS });
+
+      // Wait for A's own address bar (not just the displayed share panel)
+      // to carry the recovery token — history.replaceState patches it there
+      // right after "created".
+      await pageA.waitForFunction(
+        () => location.href.includes("?rc="),
+        undefined,
+        { timeout: UI_TIMEOUT_MS },
+      );
+      const shareLink = await readText(pageA, '[data-e2e="share-link"]');
+      assert(
+        shareLink.includes("?rc="),
+        "share link should carry a recovery token",
+      );
+
+      contextB = await browser.newContext();
+      const pageB = await contextB.newPage();
+      await pageB.goto(shareLink);
+      await waitForStatus(pageA, "secure");
+      await waitForStatus(pageB, "secure");
+
+      const codeBeforeA = await readText(pageA, '[data-e2e="safety-code"]');
+      const codeBeforeB = await readText(pageB, '[data-e2e="safety-code"]');
+      assertEquals(codeBeforeA, codeBeforeB);
+
+      // A's address bar should now carry the re-issued PAIRED token
+      // (re-patched on pairing) — confirm before relying on it surviving a
+      // real navigation.
+      assert(
+        pageA.url().includes("?rc="),
+        "creator's address bar should carry the paired recovery token",
+      );
+
+      // --- Kill the server outright and start a brand-new process on the
+      // same port with an empty RoomRegistry, sharing only the secret. ---
+      await server.stop();
+      server = await startServer({ port, roomRecoverySecret: secret });
+
+      // --- A does a REAL page reload: no in-memory Session survives this,
+      // so any recovery MUST come from the ?rc= token already sitting in
+      // A's own address bar, not from an in-session automatic retry. B's
+      // own live tab recovers on its own via the already-proven automatic
+      // path, purely as a side effect of the same server-side event — not
+      // what this test is specifically checking. ---
+      await pageA.reload();
+
+      await waitForStatus(pageA, "secure", UI_TIMEOUT_MS);
+      await waitForStatus(pageB, "secure", UI_TIMEOUT_MS);
+
+      // Rekeyed (spec §8.3) — a fresh, still-matching safety code.
+      const codeAfterA = await readText(pageA, '[data-e2e="safety-code"]');
+      const codeAfterB = await readText(pageB, '[data-e2e="safety-code"]');
+      assertEquals(codeAfterA, codeAfterB);
+      assertMatch(codeAfterA, /^\d{6}$/);
+
+      // Chat still works against the new process.
+      const messageText = `hello after reload-recovery ${crypto.randomUUID()}`;
+      await pageB.fill('[data-e2e="composer"]', messageText, {
+        timeout: UI_TIMEOUT_MS,
+      });
+      await pageB.click('[data-e2e="send"]', { timeout: UI_TIMEOUT_MS });
+      await pageA
+        .locator('[data-e2e="message"]')
+        .filter({ hasText: messageText })
+        .first()
+        .waitFor({ state: "attached", timeout: UI_TIMEOUT_MS });
+    } finally {
+      await contextA?.close();
+      await contextB?.close();
+      await browser.close();
+      await server.stop();
+    }
+  },
+);
