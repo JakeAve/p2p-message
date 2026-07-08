@@ -186,6 +186,99 @@ Deno.test("happy path: create, join, bidirectional signal relay, ping/pong", asy
   }
 });
 
+Deno.test("recovery: a join with a valid recoveryToken revives a room an empty registry has never seen", async () => {
+  const registryA = new RoomRegistry({ recoverySecret: "s3cr3t" });
+  const { server: serverA, port: portA } = startTestServer({}, registryA);
+  const alice = await TestClient.connect(portA);
+  alice.send({
+    type: "create",
+    roomId: ROOM,
+    inviteWindowMs: 600_000,
+    graceDurationMs: 120_000,
+  });
+  const created = await alice.next();
+  assert(created.type === "created");
+  assert(created.recoveryToken !== undefined);
+  const token = created.recoveryToken;
+  // Clean up registryA's invite-window timer before tearing the server
+  // down — leave-the-page invites keep an unpaired room (and its
+  // countdown) alive across a socket drop, so a bare close() alone would
+  // leak it.
+  alice.send({ type: "leave", roomId: ROOM });
+  await alice.close();
+  await serverA.shutdown();
+
+  // A second server/registry sharing only the secret — simulates a
+  // cold-started instance with an empty room map.
+  const registryB = new RoomRegistry({ recoverySecret: "s3cr3t" });
+  const { server: serverB, port: portB } = startTestServer({}, registryB);
+  try {
+    const bob = await TestClient.connect(portB);
+    bob.send({ type: "join", roomId: ROOM, recoveryToken: token });
+    const joined = await bob.next();
+    assert(joined.type === "joined");
+    assertEquals(joined.participants, []); // first one back, alone
+    assert(joined.recoveryToken !== undefined); // still an unpaired token
+
+    const carol = await TestClient.connect(portB);
+    carol.send({ type: "join", roomId: ROOM, recoveryToken: token });
+    const joined2 = await carol.next();
+    assert(joined2.type === "joined");
+    assertEquals(joined2.participants, [joined.peerId]);
+    assert(joined2.recoveryToken !== undefined);
+
+    const peerJoined = await bob.next();
+    assert(peerJoined.type === "peer-joined");
+    assert(peerJoined.recoveryToken !== undefined); // paired token reaches the survivor too
+
+    // Cleanup: end the room so no grace timer leaks past this test.
+    carol.send({ type: "leave", roomId: ROOM });
+    await bob.next(); // room-closed peer-ended
+    await bob.closed();
+    await carol.close();
+  } finally {
+    await serverB.shutdown();
+  }
+});
+
+Deno.test("recovery: join without a token still gets room-not-found for an unknown room", async () => {
+  const { server, port } = startTestServer(
+    {},
+    new RoomRegistry({ recoverySecret: "s3cr3t" }),
+  );
+  try {
+    const client = await TestClient.connect(port);
+    client.send({ type: "join", roomId: ROOM });
+    const res = await client.next();
+    assert(res.type === "error");
+    assertEquals(res.code, "room-not-found");
+    await client.close();
+  } finally {
+    await server.shutdown();
+  }
+});
+
+Deno.test("recovery: not configured means created/joined never carry a recoveryToken", async () => {
+  const { server, port } = startTestServer(); // default registry, no recoverySecret
+  const alice = await TestClient.connect(port);
+  try {
+    alice.send({
+      type: "create",
+      roomId: ROOM,
+      inviteWindowMs: 600_000,
+      graceDurationMs: 120_000,
+    });
+    const created = await alice.next();
+    assert(created.type === "created");
+    assertEquals(created.recoveryToken, undefined);
+    // Cleanup: clear the invite-window timer before shutting down.
+    alice.send({ type: "leave", roomId: ROOM });
+    await alice.close();
+  } finally {
+    await server.shutdown();
+  }
+});
+
 Deno.test("socket close in paired: survivor gets peer-left; rejoin re-pairs", async () => {
   const { server, port, registry } = startTestServer();
   const alice = await TestClient.connect(port);

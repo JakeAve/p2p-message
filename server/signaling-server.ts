@@ -134,7 +134,13 @@ export function createSignalingHandler(
           peerId = result.peerId;
           // Hashed token only — fire and forget (no await in the handler).
           hashRoomId(msg.roomId).then((h) => console.log(`room ${h}: created`));
-          send({ type: "created", peerId: result.peerId });
+          send({
+            type: "created",
+            peerId: result.peerId,
+            ...(result.recoveryToken !== undefined
+              ? { recoveryToken: result.recoveryToken }
+              : {}),
+          });
           break;
         }
 
@@ -147,7 +153,7 @@ export function createSignalingHandler(
             send({ type: "error", code: "rate-limited" });
             break;
           }
-          const result = registry.join(msg.roomId, link);
+          const result = registry.join(msg.roomId, link, msg.recoveryToken);
           if (!result.ok) {
             send({ type: "error", code: result.code });
             if (result.code === "room-full") {
@@ -163,6 +169,9 @@ export function createSignalingHandler(
             peerId: result.peerId,
             participants: result.participants,
             graceDurationMs: result.graceDurationMs,
+            ...(result.recoveryToken !== undefined
+              ? { recoveryToken: result.recoveryToken }
+              : {}),
           });
           break;
         }
@@ -208,5 +217,18 @@ export function createSignalingHandler(
   };
 }
 
+function parseOptionalMs(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 /** Default wiring for main.ts: one process-wide registry and limiter set. */
-export const handleConnection: ConnectionHandler = createSignalingHandler();
+export const handleConnection: ConnectionHandler = createSignalingHandler(
+  new RoomRegistry({
+    recoverySecret: Deno.env.get("ROOM_RECOVERY_SECRET"),
+    recoveryMaxAgeMs: parseOptionalMs(
+      Deno.env.get("ROOM_RECOVERY_MAX_AGE_MS"),
+    ),
+  }),
+);
