@@ -8,6 +8,7 @@ import {
   type RoomClosedReason,
   type ServerMessage,
 } from "../shared/protocol.ts";
+import { signRecoveryToken, verifyRecoveryToken } from "./room-recovery.ts";
 
 export function clampInviteWindow(ms: number): number {
   return Math.min(Math.max(ms, INVITE_WINDOW_MIN_MS), INVITE_WINDOW_MAX_MS);
@@ -28,10 +29,14 @@ export interface RegistryOptions {
   setTimeout?: (fn: () => void, ms: number) => number;
   clearTimeout?: (id: number) => void;
   now?: () => number;
+  /** Stable HMAC key for signed room-recovery tokens. Unset = feature off. */
+  recoverySecret?: string;
+  /** Upper bound on a *paired* room's recovery, measured from pairedAt. */
+  recoveryMaxAgeMs?: number;
 }
 
 export type CreateResult =
-  | { ok: true; peerId: string }
+  | { ok: true; peerId: string; recoveryToken?: string }
   | { ok: false; code: ErrorCode };
 
 export type JoinResult =
@@ -40,6 +45,7 @@ export type JoinResult =
     peerId: string;
     participants: string[];
     graceDurationMs: number;
+    recoveryToken?: string;
   }
   | { ok: false; code: ErrorCode };
 
@@ -55,9 +61,13 @@ interface Room {
   deadline?: number; // epoch ms; single active countdown
   timer?: number;
   createdAt: number;
+  /** null until the room first reaches CAPACITY; re-stamped on every later
+   * genuine two-party re-pair, never advanced by a solo recovery alone. */
+  pairedAt: number | null;
 }
 
 export const MAX_ROOMS = 10_000; // spec §8.2 global cap
+export const DEFAULT_RECOVERY_MAX_AGE_MS = 21_600_000; // 6 hours
 
 const CAPACITY = 2;
 
@@ -65,6 +75,12 @@ const CAPACITY = 2;
  * Spec §5 room state machine. `waiting` and `grace` are mutually exclusive —
  * a room has at most one live countdown; `deadline`/`timer` are repurposed
  * between them, never run in parallel. Closed rooms are deleted immediately.
+ *
+ * Stateless room recovery (docs/superpowers/specs/2026-07-07-stateless-room-
+ * recovery-design.md): when recoverySecret is configured, create()/pairing
+ * issue a signed capability token; join() on a map-miss verifies a presented
+ * token and synthesizes the room in the correct state before falling through
+ * to the normal join path unchanged.
  */
 export class RoomRegistry {
   #rooms = new Map<string, Room>();
@@ -72,12 +88,17 @@ export class RoomRegistry {
   #setTimeout: (fn: () => void, ms: number) => number;
   #clearTimeout: (id: number) => void;
   #now: () => number;
+  #recoverySecret: string | undefined;
+  #recoveryMaxAgeMs: number;
 
   constructor(options: RegistryOptions = {}) {
     this.#maxRooms = options.maxRooms ?? MAX_ROOMS;
     this.#setTimeout = options.setTimeout ?? ((fn, ms) => setTimeout(fn, ms));
     this.#clearTimeout = options.clearTimeout ?? ((id) => clearTimeout(id));
     this.#now = options.now ?? Date.now;
+    this.#recoverySecret = options.recoverySecret;
+    this.#recoveryMaxAgeMs = options.recoveryMaxAgeMs ??
+      DEFAULT_RECOVERY_MAX_AGE_MS;
   }
 
   get roomCount(): number {
@@ -116,6 +137,7 @@ export class RoomRegistry {
       inviteWindowMs: clampInviteWindow(inviteWindowMs),
       graceDurationMs: clampGrace(graceDurationMs),
       createdAt: this.#now(),
+      pairedAt: null,
     };
     this.#rooms.set(roomId, room);
     this.#startCountdown(
@@ -123,14 +145,21 @@ export class RoomRegistry {
       room.inviteWindowMs,
       () => this.#closeRoom(room, "invite-expired"),
     );
-    return { ok: true, peerId };
+    const recoveryToken = this.#issueToken(room);
+    return {
+      ok: true,
+      peerId,
+      ...(recoveryToken !== undefined ? { recoveryToken } : {}),
+    };
   }
 
-  join(roomId: string, link: PeerLink): JoinResult {
-    const room = this.#rooms.get(roomId);
+  join(roomId: string, link: PeerLink, recoveryToken?: string): JoinResult {
+    let room = this.#rooms.get(roomId);
     if (!room) {
-      // Malformed and unknown roomIds get the same answer: no such room.
-      return { ok: false, code: "room-not-found" };
+      room = this.#recoverRoom(roomId, recoveryToken);
+      if (!room) {
+        return { ok: false, code: "room-not-found" };
+      }
     }
     if (room.peers.size >= CAPACITY) {
       // Fail-closed: no peer-joined broadcast, no metadata for a third party.
@@ -138,23 +167,40 @@ export class RoomRegistry {
     }
     const peerId = crypto.randomUUID();
     const participants = [...room.peers.keys()];
-    for (const existing of room.peers.values()) {
-      existing.send({ type: "peer-joined", peerId });
-    }
-    room.peers.set(peerId, link);
-    if (room.peers.size === CAPACITY) {
+    const willPair = room.peers.size + 1 === CAPACITY;
+    if (willPair) {
       // waiting → paired (first pairing kills the invite window for good)
       // or grace → paired (rejoin; grace timer cancelled, spec §5).
+      // Also true for a room recovery just synthesized (§4 of the design).
       this.#stopCountdown(room);
       room.state = "paired";
+      room.pairedAt = this.#now();
     }
-    // If a grace-state room went 0 → 1 sockets, it stays in "grace" with the
-    // original deadline untouched (single room-level grace timer, spec §5).
+    // Computed AFTER the pairedAt stamp above, so a pairing join's token
+    // reflects the room's new paired state for both the joiner (JoinResult)
+    // and the already-waiting peer (peer-joined, below).
+    const recoveryTokenOut = this.#issueToken(room);
+    for (const existing of room.peers.values()) {
+      existing.send({
+        type: "peer-joined",
+        peerId,
+        ...(recoveryTokenOut !== undefined
+          ? { recoveryToken: recoveryTokenOut }
+          : {}),
+      });
+    }
+    room.peers.set(peerId, link);
+    // If a grace-state room went 0 → 1 sockets (not pairing yet), it stays
+    // in "grace" with the original deadline untouched (single room-level
+    // grace timer, spec §5).
     return {
       ok: true,
       peerId,
       participants,
       graceDurationMs: room.graceDurationMs,
+      ...(recoveryTokenOut !== undefined
+        ? { recoveryToken: recoveryTokenOut }
+        : {}),
     };
   }
 
@@ -213,6 +259,64 @@ export class RoomRegistry {
         // or a rejoin.
         break;
     }
+  }
+
+  #issueToken(room: Room): string | undefined {
+    if (!this.#recoverySecret) return undefined;
+    return signRecoveryToken({
+      roomId: room.id,
+      createdAt: room.createdAt,
+      pairedAt: room.pairedAt,
+      inviteWindowMs: room.inviteWindowMs,
+      graceDurationMs: room.graceDurationMs,
+    }, this.#recoverySecret);
+  }
+
+  /**
+   * Verify a presented recovery token and, if valid and still within its
+   * age bound, synthesize a fresh Room for it — in "waiting" (with the
+   * *remaining* invite budget) if never paired, or "grace" (a fresh
+   * countdown starting now) if it was. Returns undefined on any failure,
+   * which join() treats identically to "no such room."
+   */
+  #recoverRoom(roomId: string, token: string | undefined): Room | undefined {
+    if (!token || !this.#recoverySecret) return undefined;
+    const payload = verifyRecoveryToken(token, this.#recoverySecret);
+    if (!payload || payload.roomId !== roomId) return undefined;
+    if (this.#rooms.size >= this.#maxRooms) return undefined;
+
+    const now = this.#now();
+    const base = {
+      id: roomId,
+      peers: new Map<string, PeerLink>(),
+      creatorPeerId: "", // unknown after recovery; never read elsewhere
+      inviteWindowMs: payload.inviteWindowMs,
+      graceDurationMs: payload.graceDurationMs,
+      createdAt: payload.createdAt,
+    };
+
+    let room: Room;
+    if (payload.pairedAt === null) {
+      if (now - payload.createdAt > payload.inviteWindowMs) return undefined;
+      room = { ...base, state: "waiting", pairedAt: null };
+      this.#rooms.set(roomId, room);
+      const remaining = payload.createdAt + payload.inviteWindowMs - now;
+      this.#startCountdown(
+        room,
+        remaining,
+        () => this.#closeRoom(room, "invite-expired"),
+      );
+    } else {
+      if (now - payload.pairedAt > this.#recoveryMaxAgeMs) return undefined;
+      room = { ...base, state: "grace", pairedAt: payload.pairedAt };
+      this.#rooms.set(roomId, room);
+      this.#startCountdown(
+        room,
+        room.graceDurationMs,
+        () => this.#closeRoom(room, "grace-expired"),
+      );
+    }
+    return room;
   }
 
   #startCountdown(room: Room, ms: number, onExpire: () => void): void {

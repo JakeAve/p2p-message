@@ -7,6 +7,7 @@ import {
   RoomRegistry,
 } from "./rooms.ts";
 import type { ServerMessage } from "../shared/protocol.ts";
+import { verifyRecoveryToken } from "./room-recovery.ts";
 
 // ---------- helpers ----------
 
@@ -54,17 +55,24 @@ class FakeLink implements PeerLink {
   }
 }
 
-function makeRegistry(clock: FakeClock, maxRooms?: number): RoomRegistry {
+function makeRegistry(
+  clock: FakeClock,
+  maxRooms?: number,
+  recovery?: { recoverySecret?: string; recoveryMaxAgeMs?: number },
+): RoomRegistry {
   return new RoomRegistry({
     maxRooms,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
     now: clock.getNow,
+    recoverySecret: recovery?.recoverySecret,
+    recoveryMaxAgeMs: recovery?.recoveryMaxAgeMs,
   });
 }
 
 const ROOM_A = "A".repeat(22);
 const ROOM_B = "B".repeat(22);
+const RECOVERY_SECRET = "test-recovery-secret";
 
 // ---------- clamps ----------
 
@@ -520,4 +528,218 @@ Deno.test("leave during grace closes the room (peer-ended to no one left)", () =
   assertEquals(registry.roomCount, 0);
   assertEquals(clock.pendingTimers, 0);
   assertEquals(joiner.sent, []); // the leaver gets nothing back
+});
+
+// ---------- recovery: issuance ----------
+
+Deno.test("create: no recoveryToken when recovery is not configured", () => {
+  const clock = new FakeClock();
+  const registry = makeRegistry(clock);
+  const result = registry.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(result.ok);
+  assertEquals(result.recoveryToken, undefined);
+});
+
+Deno.test("create: issues a verifiable recoveryToken when recovery is configured", () => {
+  const clock = new FakeClock();
+  const registry = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  const result = registry.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(result.ok);
+  assert(result.recoveryToken !== undefined);
+  const payload = verifyRecoveryToken(result.recoveryToken, RECOVERY_SECRET);
+  assert(payload !== null);
+  assertEquals(payload.roomId, ROOM_A);
+  assertEquals(payload.pairedAt, null);
+  assertEquals(payload.inviteWindowMs, 600_000);
+  assertEquals(payload.graceDurationMs, 120_000);
+});
+
+// ---------- recovery: pairing re-issuance ----------
+
+Deno.test("join: pairing stamps pairedAt and delivers an updated token via both joined and peer-joined", () => {
+  const clock = new FakeClock();
+  const registry = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  const creatorLink = new FakeLink();
+  const created = registry.create(ROOM_A, 600_000, 120_000, creatorLink);
+  assert(created.ok);
+
+  const joined = registry.join(ROOM_A, new FakeLink());
+  assert(joined.ok);
+
+  assert(joined.recoveryToken !== undefined);
+  const payload = verifyRecoveryToken(joined.recoveryToken, RECOVERY_SECRET);
+  assert(payload !== null && payload.pairedAt !== null);
+
+  // The creator (the "existing" peer at join time) gets the same updated,
+  // now-paired token via peer-joined.
+  assertEquals(creatorLink.sent, [{
+    type: "peer-joined",
+    peerId: joined.peerId,
+    recoveryToken: joined.recoveryToken,
+  }]);
+});
+
+// ---------- recovery: reconstructing a missing room ----------
+
+Deno.test("join: recovers an unpaired room with the remaining invite budget, not a fresh window", () => {
+  const clock = new FakeClock();
+  const origin = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  const created = origin.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(created.ok);
+  const token = created.recoveryToken!;
+
+  // A fresh registry sharing only the secret + clock simulates a cold-started
+  // instance that has never heard of this room.
+  const fresh = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  clock.advance(240_000); // 4 minutes into the 10-minute invite window
+  const joined = fresh.join(ROOM_A, new FakeLink(), token);
+  assert(joined.ok);
+  assertEquals(fresh.stateOf(ROOM_A), "waiting");
+  assertEquals(fresh.roomCount, 1);
+
+  // ~6 minutes of remaining budget governs this recovered room, not a fresh
+  // 10-minute window.
+  clock.advance(360_001);
+  assertEquals(fresh.roomCount, 0);
+});
+
+Deno.test("join: rejects unpaired recovery once the invite window has genuinely elapsed", () => {
+  const clock = new FakeClock();
+  const origin = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  const created = origin.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(created.ok);
+  const token = created.recoveryToken!;
+
+  const fresh = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  clock.advance(600_001); // just past the 10-minute invite window
+  const joined = fresh.join(ROOM_A, new FakeLink(), token);
+  assertFalse(joined.ok);
+  if (!joined.ok) assertEquals(joined.code, "room-not-found");
+  assertEquals(fresh.roomCount, 0);
+});
+
+Deno.test("join: recovers a paired room into grace using ROOM_RECOVERY_MAX_AGE_MS from pairedAt, ignoring inviteWindowMs", () => {
+  const clock = new FakeClock();
+  const origin = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+    recoveryMaxAgeMs: 21_600_000, // 6h, explicit for clarity
+  });
+  const created = origin.create(ROOM_A, 30_000, 120_000, new FakeLink()); // tiny 30s invite window
+  assert(created.ok);
+  const joined = origin.join(ROOM_A, new FakeLink());
+  assert(joined.ok);
+  const pairedToken = joined.recoveryToken!;
+  const payload = verifyRecoveryToken(pairedToken, RECOVERY_SECRET);
+  assert(payload !== null && payload.pairedAt !== null);
+
+  clock.advance(3_600_000); // 1 hour later — long past the original 30s invite window
+  const fresh = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  const recovered = fresh.join(ROOM_A, new FakeLink(), pairedToken);
+  assert(recovered.ok); // invite window is irrelevant once paired
+  assertEquals(fresh.stateOf(ROOM_A), "grace");
+
+  clock.advance(21_600_001); // past ROOM_RECOVERY_MAX_AGE_MS since pairedAt
+  assertEquals(fresh.roomCount, 0);
+});
+
+Deno.test("join: rejects recovery on bad signature or mismatched roomId", () => {
+  const clock = new FakeClock();
+  const origin = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  const created = origin.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(created.ok);
+  const token = created.recoveryToken!;
+
+  const wrongSecret = makeRegistry(clock, undefined, {
+    recoverySecret: "a-different-secret",
+  });
+  const badSig = wrongSecret.join(ROOM_A, new FakeLink(), token);
+  assertFalse(badSig.ok);
+
+  const rightSecret = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  const wrongRoom = rightSecret.join(ROOM_B, new FakeLink(), token); // token is for ROOM_A
+  assertFalse(wrongRoom.ok);
+});
+
+Deno.test("join: recovery respects MAX_ROOMS capacity", () => {
+  const clock = new FakeClock();
+  const origin = makeRegistry(clock, 1, { recoverySecret: RECOVERY_SECRET });
+  const created = origin.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(created.ok);
+  const token = created.recoveryToken!;
+
+  const fresh = makeRegistry(clock, 1, { recoverySecret: RECOVERY_SECRET });
+  const other = fresh.create(ROOM_B, 600_000, 120_000, new FakeLink());
+  assert(other.ok); // fills the cap of 1
+  const recovered = fresh.join(ROOM_A, new FakeLink(), token);
+  assertFalse(recovered.ok);
+  if (!recovered.ok) assertEquals(recovered.code, "room-not-found");
+});
+
+Deno.test("join: second peer's recovery-token join pairs normally into a room synthesized by the first", () => {
+  const clock = new FakeClock();
+  const origin = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  const created = origin.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(created.ok);
+  const token = created.recoveryToken!;
+
+  const fresh = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  const firstLink = new FakeLink();
+  const first = fresh.join(ROOM_A, firstLink, token);
+  assert(first.ok);
+  assertEquals(fresh.stateOf(ROOM_A), "waiting");
+
+  const second = fresh.join(ROOM_A, new FakeLink(), token); // both peers hold the same pre-pairing token
+  assert(second.ok);
+  assertEquals(fresh.stateOf(ROOM_A), "paired");
+  assertEquals(firstLink.sent, [{
+    type: "peer-joined",
+    peerId: second.peerId,
+    recoveryToken: second.recoveryToken,
+  }]);
+});
+
+Deno.test("join: two back-to-back recovery attempts for the same room never both synthesize", () => {
+  // The registry is fully synchronous by construction (sync HMAC verify —
+  // see the plan's Global Constraints), so there is no async gap between a
+  // map-miss and inserting the synthesized room for two calls to race
+  // around; this test pins that observable guarantee.
+  const clock = new FakeClock();
+  const origin = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  const created = origin.create(ROOM_A, 600_000, 120_000, new FakeLink());
+  assert(created.ok);
+  const token = created.recoveryToken!;
+
+  const fresh = makeRegistry(clock, undefined, {
+    recoverySecret: RECOVERY_SECRET,
+  });
+  const a = fresh.join(ROOM_A, new FakeLink(), token);
+  const b = fresh.join(ROOM_A, new FakeLink(), token);
+  assert(a.ok);
+  assert(b.ok); // pairs into the room `a` just synthesized, not a second synthesis
+  assertEquals(fresh.roomCount, 1);
+  assertEquals(fresh.stateOf(ROOM_A), "paired");
 });
