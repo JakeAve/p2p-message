@@ -57,6 +57,7 @@ export type SessionEvent =
   | { type: "chat"; text: string; timestamp: number } // from peer
   | { type: "peer-identity"; displayName: string }
   | { type: "grace-countdown"; msRemaining: number } // ~1/sec while reconnecting
+  | { type: "recovery-token"; token: string } // a fresh signed room-recovery capability arrived
   | { type: "ended"; reason: EndReason };
 
 export interface SessionOptions {
@@ -66,6 +67,7 @@ export interface SessionOptions {
   displayName?: string;
   inviteWindowMs?: number; // creator only
   graceDurationMs?: number; // creator only
+  recoveryToken?: string; // joiner only — from the share link's ?rc= param
 }
 
 /** Test seam (superset of C5): inject a fake transport and manual timers. */
@@ -123,12 +125,19 @@ export class Session {
   private waitingDeadline = 0;
   private waitingRejoin = false;
 
+  // Stateless room recovery: the latest signed capability the server has
+  // issued us, and a small retry budget for the narrow race where a paired
+  // token is lost in flight (design §3's "one race worth a cheap mitigation").
+  private recoveryToken: string | undefined;
+  private recoveryRetriesLeft = 0;
+
   constructor(opts: SessionOptions, deps: SessionDeps = {}) {
     this.opts = opts;
     this.timers = deps.timers ?? realTimers;
     this.transport = deps.transport ?? new WebRTCTransport(opts.signalingUrl);
     this.graceDurationMs = opts.graceDurationMs ?? DEFAULT_GRACE_MS;
     this.transport.onEvent((e) => this.enqueue(e));
+    this.rememberRecoveryToken(opts.recoveryToken);
   }
 
   get status(): SessionStatus {
@@ -157,7 +166,7 @@ export class Session {
         this.graceDurationMs,
       );
     } else {
-      this.transport.joinRoom(this.roomId);
+      this.transport.joinRoom(this.roomId, this.recoveryToken);
     }
     await ack;
   }
@@ -249,16 +258,29 @@ export class Session {
     this.startAck = null;
   }
 
+  /** Remember the latest signed room-recovery capability and reset this
+   * instance's retry budget — but only on a genuinely NEW token, so a
+   * repeated identical value (e.g. re-delivered on a no-op peer-joined)
+   * doesn't reset retries or spam the "recovery-token" event. */
+  private rememberRecoveryToken(token: string | undefined): void {
+    if (token === undefined || token === this.recoveryToken) return;
+    this.recoveryToken = token;
+    this.recoveryRetriesLeft = 2;
+    this.emit({ type: "recovery-token", token });
+  }
+
   private async handleEvent(e: TransportEvent): Promise<void> {
     if (this._status === "ended") return;
     switch (e.type) {
       case "created":
+        this.rememberRecoveryToken(e.recoveryToken);
         this.waitingDeadline = this.timers.now() +
           (this.opts.inviteWindowMs ?? DEFAULT_INVITE_WINDOW_MS);
         this.setStatus("waiting-for-peer");
         this.ackStart();
         break;
       case "joined":
+        this.rememberRecoveryToken(e.recoveryToken);
         this.graceDurationMs = e.graceDurationMs;
         this.waitingRejoin = false;
         if (
@@ -277,6 +299,7 @@ export class Session {
         this.ackStart();
         break;
       case "peer-joined":
+        this.rememberRecoveryToken(e.recoveryToken);
         break; // status changes when the DataChannel opens
       case "data-open":
         this.clearGraceTimers();
@@ -320,6 +343,18 @@ export class Session {
   }
 
   private handleServerError(code: ErrorCode): void {
+    if (
+      code === "room-not-found" && this.recoveryToken !== undefined &&
+      this.recoveryRetriesLeft > 0 && this.rejoinAllowed()
+    ) {
+      // A recovery token was presented but this instance still says
+      // room-not-found — most likely the pairing-time token update raced a
+      // second eviction in flight (design §3). Retry on the existing 2s
+      // cadence before giving up, rather than finishing on the first miss.
+      this.recoveryRetriesLeft--;
+      this.scheduleRejoin();
+      return;
+    }
     let reason: EndReason;
     if (code === "room-not-found") {
       // On a rejoin, "not found" means the room died while we were away:
@@ -567,7 +602,7 @@ export class Session {
     void this.transport.connect().then(
       () => {
         if (this.rejoinAllowed()) {
-          this.transport.joinRoom(this.roomId);
+          this.transport.joinRoom(this.roomId, this.recoveryToken);
         }
       },
       () => {

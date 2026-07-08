@@ -85,6 +85,24 @@ function makeJoiner(
   return { session, transport, timers, fragmentSecret };
 }
 
+function makeJoinerWithRecoveryToken(
+  recoveryToken: string,
+  transport = new FakeTransport(),
+  timers = new ManualTimers(),
+) {
+  const fragmentSecret = generateFragmentSecret();
+  const session = new Session(
+    {
+      role: "joiner",
+      fragmentSecret,
+      signalingUrl: "ws://x.test/ws",
+      recoveryToken,
+    },
+    { transport, timers },
+  );
+  return { session, transport, timers, fragmentSecret };
+}
+
 Deno.test("status is connecting before start()", () => {
   const { session } = makeCreator();
   assertEquals(session.status, "connecting");
@@ -129,6 +147,104 @@ Deno.test("joiner start(): joins the derived room and resolves on joined ack", a
   const token = await derivePathToken(fragmentSecret);
   assertEquals(transport.calls, ["connect", `join:${token}`]);
   assertEquals(session.status, "connecting"); // securing only once the DataChannel opens
+});
+
+Deno.test("joiner start() presents a URL-supplied recoveryToken on the very first join", async () => {
+  const { session, transport, fragmentSecret } = makeJoinerWithRecoveryToken(
+    "rc-from-url",
+  );
+  await session.start();
+  const token = await derivePathToken(fragmentSecret);
+  assertEquals(transport.calls, ["connect", `join:${token}:rc-from-url`]);
+});
+
+Deno.test("creator remembers a recoveryToken from created and presents it on rejoin", async () => {
+  const { session, transport } = makeCreator();
+  transport.respondToCreate = [{
+    type: "created",
+    peerId: "creator-peer",
+    recoveryToken: "rc-created",
+  }];
+  await session.start();
+  transport.respondToJoin = [{
+    type: "joined",
+    peerId: "creator-peer-2",
+    participants: [],
+    graceDurationMs: 120_000,
+  }];
+  transport.emit({ type: "signaling-lost" });
+  await flushAsync();
+  assert(transport.calls.some((c) => c.endsWith(":rc-created")));
+});
+
+Deno.test("recovery-token event fires only when a NEW token arrives, never for the same one twice", async () => {
+  const { session, transport } = makeCreator();
+  transport.respondToCreate = [{
+    type: "created",
+    peerId: "creator-peer",
+    recoveryToken: "rc-1",
+  }];
+  const events = collect(session);
+  await session.start();
+  // Re-deliver the SAME token via peer-joined (as an unrelated pairing
+  // event might, if nothing about recovery actually changed) — must not
+  // fire a second recovery-token event or reset the retry budget.
+  transport.emit({ type: "peer-joined", peerId: "x", recoveryToken: "rc-1" });
+  await flushAsync();
+  const tokenEvents = events.filter((e) => e.type === "recovery-token");
+  assertEquals(tokenEvents, [{ type: "recovery-token", token: "rc-1" }]);
+});
+
+Deno.test("on room-not-found with a recoveryToken presented, retries before finishing", async () => {
+  // FakeTransport.respondToJoin re-fires its whole array on EVERY joinRoom()
+  // call (it's not a per-call sequence), so — mirroring the existing
+  // "failed reconnect is retried on the rejoin timer" test's pattern of
+  // swapping connectError between attempts — this swaps respondToJoin
+  // between the first (failing) attempt and the retry, rather than trying
+  // to queue multiple responses up front.
+  const pair = await makeSecurePair();
+  pair.tb.respondToJoin = [{ type: "server-error", code: "room-not-found" }];
+  // Seed B's remembered token the way a real "joined" would have, as if
+  // the server had recovery configured.
+  pair.tb.emit({
+    type: "joined",
+    peerId: "joiner-peer-seed",
+    participants: [],
+    graceDurationMs: 120_000,
+    recoveryToken: "rc-seed",
+  });
+  await flushAsync();
+
+  pair.tb.emit({ type: "signaling-lost" });
+  await flushAsync();
+  // The first rejoin attempt got room-not-found but a token was presented,
+  // so it retried on the 2s cadence instead of ending immediately.
+  assertEquals(pair.b.status, "reconnecting");
+
+  // Let the retry succeed.
+  pair.tb.respondToJoin = [{
+    type: "joined",
+    peerId: "joiner-peer-2",
+    participants: ["creator-peer"],
+    graceDurationMs: 120_000,
+  }];
+  const secureB = waitForEvent(pair.b, "secure");
+  await pair.timersB.tick(REJOIN_RETRY_MS);
+  pair.ta.emit({ type: "peer-joined", peerId: "joiner-peer-2" });
+  openData(pair.ta, pair.tb);
+  await secureB;
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("on room-not-found with NO recoveryToken, still ends immediately (backward compatible)", async () => {
+  const { session, transport } = makeCreator();
+  await session.start();
+  transport.respondToJoin = [{ type: "server-error", code: "room-not-found" }];
+  const ended = waitForEvent(session, "ended");
+  transport.emit({ type: "signaling-lost" });
+  assertEquals((await ended).reason, "invite-expired");
 });
 
 Deno.test("start() may only be called once", async () => {
