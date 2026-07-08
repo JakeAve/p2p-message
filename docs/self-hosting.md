@@ -32,15 +32,19 @@ ICE_STUN_SERVERS=stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302
 ICE_TURN_SERVERS=turn:turn.example.com:3478?transport=udp,turns:turn.example.com:5349?transport=tcp
 TURN_STATIC_SECRET=<random 32+ byte secret, generated once, never committed>
 TURN_CREDENTIAL_TTL=3600
+ROOM_RECOVERY_SECRET=<random 32+ byte secret, generated once, never committed>
+ROOM_RECOVERY_MAX_AGE_MS=21600000
 ```
 
-| Variable              | Meaning                                                                                                                                                                                                                                                                                          |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `PORT`                | HTTP/WebSocket listen port. Default `8000`.                                                                                                                                                                                                                                                      |
-| `ICE_STUN_SERVERS`    | Comma-separated `stun:` URLs served to clients for NAT discovery. Optional — if unset, the server falls back to Google's public STUN servers so ICE works out of the box. STUN only reveals your public IP/port to you; it never carries traffic.                                                |
-| `ICE_TURN_SERVERS`    | Comma-separated `turn:`/`turns:` URLs of your relay. **If this is unset/empty, or `TURN_STATIC_SECRET` is not also set, TURN is omitted entirely and the app runs STUN-only.**                                                                                                                   |
-| `TURN_STATIC_SECRET`  | Shared secret for coturn's `use-auth-secret` REST scheme. Must be byte-identical to `static-auth-secret` in `turnserver.conf`. Generate with `openssl rand -base64 48`. The secret never leaves the server: clients receive short-lived HMAC credentials derived from it via `/api/ice-servers`. |
-| `TURN_CREDENTIAL_TTL` | Lifetime (seconds) of those derived TURN credentials. Default `3600`.                                                                                                                                                                                                                            |
+| Variable                   | Meaning                                                                                                                                                                                                                                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PORT`                     | HTTP/WebSocket listen port. Default `8000`.                                                                                                                                                                                                                                                      |
+| `ICE_STUN_SERVERS`         | Comma-separated `stun:` URLs served to clients for NAT discovery. Optional — if unset, the server falls back to Google's public STUN servers so ICE works out of the box. STUN only reveals your public IP/port to you; it never carries traffic.                                                |
+| `ICE_TURN_SERVERS`         | Comma-separated `turn:`/`turns:` URLs of your relay. **If this is unset/empty, or `TURN_STATIC_SECRET` is not also set, TURN is omitted entirely and the app runs STUN-only.**                                                                                                                   |
+| `TURN_STATIC_SECRET`       | Shared secret for coturn's `use-auth-secret` REST scheme. Must be byte-identical to `static-auth-secret` in `turnserver.conf`. Generate with `openssl rand -base64 48`. The secret never leaves the server: clients receive short-lived HMAC credentials derived from it via `/api/ice-servers`. |
+| `TURN_CREDENTIAL_TTL`      | Lifetime (seconds) of those derived TURN credentials. Default `3600`.                                                                                                                                                                                                                            |
+| `ROOM_RECOVERY_SECRET`     | Enables stateless room recovery (see "Single instance, no persistence" below). Unset by default — the app behaves exactly as documented with no code-visible difference. Generate with `openssl rand -base64 48`; never leaves the server.                                                       |
+| `ROOM_RECOVERY_MAX_AGE_MS` | How long, in ms, a _paired_ room stays recoverable after an instance loses it. Default `21600000` (6 hours). Doesn't apply before pairing — an un-paired invite is always bounded by its own invite window instead.                                                                              |
 
 ## STUN-only vs TURN
 
@@ -66,6 +70,17 @@ Rooms live only in process memory. Consequences you must accept:
   link. This is deliberate and honest for an ephemeral product; do not add a
   persistence layer.
 - Nothing to back up, no database to run.
+
+**If you can't guarantee a single always-on instance** (serverless/edge hosting
+that cold-starts or recycles isolates — e.g. Deno Deploy), set
+`ROOM_RECOVERY_SECRET`. The server then issues a small signed capability
+alongside each room; if a fresh instance ever loses a room's in-memory state, a
+client presenting a still-valid capability can have it legitimately
+reconstructed rather than getting a false "this link isn't active" error. This
+still adds no database and no shared state between instances — see
+`docs/superpowers/specs/2026-07-07-stateless-room-recovery-design.md` for the
+full design. If you _can_ guarantee single-instance hosting, there's no reason
+to set this — leave it unset.
 
 ## Reverse proxy
 
