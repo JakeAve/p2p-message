@@ -8,6 +8,12 @@ export function generateFragmentSecret(): Uint8Array<ArrayBuffer> {
   return crypto.getRandomValues(new Uint8Array(32));
 }
 
+/** 64 random bits, base64url (11 chars) — per-message id for delivery acks.
+ * Uniqueness only matters within one two-person session. */
+export function generateMessageId(): string {
+  return bytesToBase64url(crypto.getRandomValues(new Uint8Array(8)));
+}
+
 export function bytesToBase64url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) {

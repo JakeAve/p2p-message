@@ -17,12 +17,14 @@ import {
   exportPublicKeyRaw,
   generateEcdhKeyPair,
   generateFragmentSecret,
+  generateMessageId,
   importPublicKeyRaw,
   padPlaintext,
   transcriptHash,
   unpadPlaintext,
 } from "./crypto.ts";
 import { parseFrame, type Payload } from "../shared/wire.ts";
+import { MAX_MESSAGE_BYTES } from "./ui/format.ts";
 
 Deno.test("generateFragmentSecret returns 32 bytes, fresh each call", () => {
   const a = generateFragmentSecret();
@@ -367,4 +369,32 @@ Deno.test("a 4000-byte chat message fits the largest bucket", async () => {
   const payload: Payload = { type: "chat", content: "m".repeat(4000) };
   const frame = await encryptPayload(keyA, payload);
   assertEquals(await decryptPayload(keyB, frame), payload);
+});
+
+Deno.test("generateMessageId: 11-char base64url, unique across calls", () => {
+  const ids = Array.from({ length: 100 }, () => generateMessageId());
+  assertEquals(new Set(ids).size, 100);
+  for (const id of ids) assertMatch(id, /^[A-Za-z0-9_-]{11}$/);
+});
+
+Deno.test("typing and delivered payloads pad into the smallest (256-byte) bucket", () => {
+  const payloads: Payload[] = [
+    { type: "typing", active: true },
+    { type: "typing", active: false },
+    { type: "delivered", id: generateMessageId() },
+  ];
+  for (const p of payloads) {
+    const plaintext = new TextEncoder().encode(JSON.stringify(p));
+    assertEquals(padPlaintext(plaintext).length, 256, JSON.stringify(p));
+  }
+});
+
+Deno.test("a maximum-length chat message with an id still fits the largest bucket", () => {
+  const p: Payload = {
+    type: "chat",
+    id: generateMessageId(),
+    content: "a".repeat(MAX_MESSAGE_BYTES),
+  };
+  const plaintext = new TextEncoder().encode(JSON.stringify(p));
+  assertEquals(padPlaintext(plaintext).length, 4096);
 });

@@ -7,7 +7,9 @@ export type Frame = PubkeyFrame | EncryptedFrame;
 export type Payload =
   | { type: "key-confirm"; transcriptHash: string }
   | { type: "identity"; displayName: string }
-  | { type: "chat"; content: string }
+  | { type: "chat"; id?: string; content: string }
+  | { type: "delivered"; id: string }
+  | { type: "typing"; active: boolean }
   | { type: "end" };
 
 export type WireErrorCode = "bad-json" | "bad-version" | "bad-frame";
