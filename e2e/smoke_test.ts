@@ -29,8 +29,12 @@
 import { type BrowserContext, chromium, type Page } from "playwright";
 import { assert, assertEquals, assertMatch } from "@std/assert";
 
+// The ?rc= recovery token is optional here — it's only present when the
+// server has ROOM_RECOVERY_SECRET configured (e.g. via a local .env loaded
+// by main.ts's @std/dotenv/load, independent of anything this test sets
+// explicitly), which this smoke test doesn't care about either way.
 const SHARE_LINK_RE =
-  /^https?:\/\/[^/]+\/r\/[A-Za-z0-9_-]{22}#[A-Za-z0-9_-]{43}$/;
+  /^https?:\/\/[^/]+\/r\/[A-Za-z0-9_-]{22}(?:\?rc=[A-Za-z0-9_.-]+)?#[A-Za-z0-9_-]{43}$/;
 const SECURE_TIMEOUT_MS = 30_000; // signaling + ICE + handshake + key-confirm
 const UI_TIMEOUT_MS = 15_000; // any single UI reaction
 
