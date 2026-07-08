@@ -21,6 +21,8 @@ import {
 } from "./ui/screens.ts";
 import { initTheme } from "./ui/themes.ts";
 import { renderSettings } from "./ui/settings-dialog.ts";
+import { TypingSender, TypingTracker } from "./ui/typing.ts";
+import { realTimers } from "./webrtc-client.ts";
 
 const root = document.getElementById("app") as HTMLElement;
 const signalingUrl = `${
@@ -33,11 +35,15 @@ function runSession(
   route: { pathToken: string; fragment: string },
   share?: { link: string; inviteWindowMs: number },
 ): void {
+  const typingSender = new TypingSender(
+    realTimers,
+    (active) => session.sendTyping(active),
+  );
   const chat = renderChatView(root, {
     onSend: async (text) => {
       try {
-        await session.sendChat(text);
-        chat.addMessage({ text, direction: "sent", timestamp: Date.now() });
+        const id = await session.sendChat(text);
+        chat.addMessage({ id, text, direction: "sent", timestamp: Date.now() });
       } catch (error) {
         if (error instanceof SendUnavailableError) {
           // Void behavior (spec §5): never queued, never retried.
@@ -49,9 +55,13 @@ function runSession(
         }
       }
     },
+    onTyping: (nonEmpty) => typingSender.update(nonEmpty),
     onEnd: () => session.end(),
-    onTyping: () => {}, // wired in the next commit
   });
+  const peerTyping = new TypingTracker(
+    realTimers,
+    (visible) => chat.setPeerTyping(visible),
+  );
   // Test hook only: initial data-status, before the first C5 status event.
   chat.setStatusAttr(session.status);
 
@@ -69,6 +79,7 @@ function runSession(
   session.on((event) => {
     switch (event.type) {
       case "status":
+        if (event.status !== "secure") peerTyping.hide();
         chat.setStatusAttr(event.status);
         if (
           shareView &&
@@ -99,11 +110,19 @@ function runSession(
         hadSecure = true;
         break;
       case "chat":
+        peerTyping.hide(); // their message replaces the dots
         chat.addMessage({
+          id: event.id,
           text: event.text,
           direction: "received",
           timestamp: event.timestamp,
         });
+        break;
+      case "delivered":
+        chat.setDelivered(event.id);
+        break;
+      case "peer-typing":
+        peerTyping.signal(event.active);
         break;
       case "peer-identity":
         chat.setPeerName(event.displayName);
