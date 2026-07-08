@@ -20,3 +20,14 @@ export function formatCountdown(ms: number): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
+
+/**
+ * Short local time for the tap-to-reveal line (e.g. "3:42 PM" / "15:42").
+ * `locale` is a test seam; production callers omit it for the user's locale.
+ */
+export function formatMessageTime(timestamp: number, locale?: string): string {
+  return new Intl.DateTimeFormat(locale, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
+}
