@@ -10,6 +10,7 @@ import {
   encryptPayload,
   exportPublicKeyRaw,
   generateEcdhKeyPair,
+  generateMessageId,
   importPublicKeyRaw,
   transcriptHash,
 } from "./crypto.ts";
@@ -54,7 +55,8 @@ export type EndReason =
 export type SessionEvent =
   | { type: "status"; status: SessionStatus }
   | { type: "secure"; safetyCode: string } // fired on every (re)key
-  | { type: "chat"; text: string; timestamp: number } // from peer
+  | { type: "chat"; text: string; timestamp: number; id?: string } // from peer
+  | { type: "delivered"; id: string } // peer acked our message id
   | { type: "peer-identity"; displayName: string }
   | { type: "grace-countdown"; msRemaining: number } // ~1/sec while reconnecting
   | { type: "recovery-token"; token: string } // a fresh signed room-recovery capability arrived
@@ -171,7 +173,7 @@ export class Session {
     await ack;
   }
 
-  async sendChat(text: string): Promise<void> {
+  async sendChat(text: string): Promise<string> {
     // Void behavior (spec §5): never queue. Unless the session is secure and
     // the channel is open right now, the message is refused, not buffered.
     if (
@@ -179,8 +181,10 @@ export class Session {
     ) {
       throw new SendUnavailableError();
     }
+    const id = generateMessageId();
     const frame = await encryptPayload(this.sessionKey, {
       type: "chat",
+      id,
       content: text,
     });
     // Re-check: the peer may have disconnected while we were encrypting.
@@ -192,6 +196,7 @@ export class Session {
       throw new SendUnavailableError();
     }
     this.transport.sendData(JSON.stringify(frame));
+    return id;
   }
 
   end(): void {
@@ -499,11 +504,20 @@ export class Session {
         break;
       case "chat":
         if (this.confirmVerified) {
+          const id = typeof payload.id === "string" ? payload.id : undefined;
           this.emit({
             type: "chat",
             text: payload.content,
             timestamp: this.timers.now(),
+            id,
           });
+          // Ack only id-carrying chats; a pre-receipts peer sends none.
+          if (id !== undefined) this.sendDeliveredAck(id);
+        }
+        break;
+      case "delivered":
+        if (this.confirmVerified && typeof payload.id === "string") {
+          this.emit({ type: "delivered", id: payload.id });
         }
         break;
       case "end":
@@ -512,6 +526,22 @@ export class Session {
         }
         break;
     }
+  }
+
+  /** Best-effort encrypted delivery ack — fire-and-forget like identity/end;
+   * the peer may drop mid-encrypt and that must not disturb the session. */
+  private sendDeliveredAck(id: string): void {
+    const key = this.sessionKey;
+    if (!key) return;
+    void encryptPayload(key, { type: "delivered", id })
+      .then((frame) => {
+        if (this._status === "secure" && this.transport.dataOpen) {
+          this.transport.sendData(JSON.stringify(frame));
+        }
+      })
+      .catch(() => {
+        // best effort
+      });
   }
 
   private becomeSecure(): void {

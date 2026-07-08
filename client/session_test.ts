@@ -2,6 +2,7 @@
 import {
   assert,
   assertEquals,
+  assertMatch,
   assertNotEquals,
   assertRejects,
 } from "@std/assert";
@@ -16,6 +17,7 @@ import {
   type SessionEvent,
 } from "./session.ts";
 import {
+  decryptPayload,
   derivePathToken,
   deriveSessionKey,
   deriveSharedSecret,
@@ -536,6 +538,83 @@ Deno.test("chat flows both directions once secure", async () => {
   assertEquals((await chatAtA).text, "hi Ann");
   pair.a.end();
   pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("sendChat resolves to the id carried in the payload; receiver's chat event echoes it", async () => {
+  const pair = await makeSecurePair();
+  const chatAtB = waitForEvent(pair.b, "chat");
+  const id = await pair.a.sendChat("hello");
+  assertMatch(id, /^[A-Za-z0-9_-]{11}$/);
+  assertEquals((await chatAtB).id, id);
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("receiving a chat triggers an automatic delivered ack with the same id", async () => {
+  const pair = await makeSecurePair();
+  const deliveredAtA = waitForEvent(pair.a, "delivered");
+  const id = await pair.a.sendChat("knock knock");
+  assertEquals((await deliveredAtA).id, id);
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("id-less chat (old client) emits chat with undefined id and sends no ack", async () => {
+  // Play the remote peer with real crypto (same approach as the reorder-
+  // buffer test above): answer the session's pubkey, key-confirm, then
+  // send a chat payload WITHOUT an id, as a pre-receipts client would.
+  const { session, transport, fragmentSecret } = makeCreator();
+  await session.start();
+  transport.emit({ type: "peer-joined", peerId: "joiner-peer" });
+  transport.emit({ type: "data-open" });
+  await flushAsync();
+
+  const sessionPub = (transport.sentData
+    .map((s) => JSON.parse(s))
+    .find((f) => f.type === "pubkey") as { key: string }).key;
+  const kp = await generateEcdhKeyPair();
+  const myPub = await exportPublicKeyRaw(kp.publicKey);
+  const shared = await deriveSharedSecret(
+    kp.privateKey,
+    await importPublicKeyRaw(sessionPub),
+  );
+  const key = await deriveSessionKey(fragmentSecret, shared);
+
+  const secured = waitForEvent(session, "secure");
+  transport.emit({
+    type: "data-message",
+    data: JSON.stringify({ v: 1, type: "pubkey", key: myPub }),
+  });
+  const confirm = await encryptPayload(key, {
+    type: "key-confirm",
+    transcriptHash: await transcriptHash(myPub, sessionPub),
+  });
+  transport.emit({ type: "data-message", data: JSON.stringify(confirm) });
+  await secured;
+
+  const chatEvt = waitForEvent(session, "chat");
+  const idless = await encryptPayload(key, {
+    type: "chat",
+    content: "from an old client",
+  });
+  transport.emit({ type: "data-message", data: JSON.stringify(idless) });
+  const got = await chatEvt;
+  assertEquals(got.text, "from an old client");
+  assertEquals(got.id, undefined);
+
+  // No delivered ack went out: decrypt everything the session sent.
+  await flushAsync();
+  const encFrames = transport.sentData
+    .map((s) => JSON.parse(s))
+    .filter((f) => f.type === "enc");
+  for (const frame of encFrames) {
+    const payload = await decryptPayload(key, frame);
+    assertNotEquals(payload.type, "delivered");
+  }
+  session.end();
   await flushAsync();
 });
 
