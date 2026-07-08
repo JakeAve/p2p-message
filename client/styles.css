@@ -647,6 +647,11 @@ a.start-new {
   background: var(--surface-alt);
 }
 
+.settings-close svg {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
 .end-chat-dialog {
   width: min(22.5rem, calc(100vw - 2rem));
   padding: 0; /* clicks on the dialog itself = backdrop (light dismiss) */
