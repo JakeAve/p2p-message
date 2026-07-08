@@ -62,9 +62,7 @@ export function renderShareView(
   countdownLine.append("Invite expires in ", countdown);
 
   const keepOpen = el("p", "keep-open");
-  keepOpen.textContent =
-    "You can switch apps to send the link — the invite stays live until " +
-    "the countdown ends.";
+  keepOpen.textContent = "The invite stays live until the countdown ends.";
 
   card.append(title, intro, linkRow, qr, countdownLine, keepOpen);
   overlay.append(card);
