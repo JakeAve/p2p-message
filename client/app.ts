@@ -30,6 +30,7 @@ const signalingUrl = `${
 /** Wire a started-or-starting Session to the chat UI. */
 function runSession(
   session: Session,
+  route: { pathToken: string; fragment: string },
   share?: { link: string; inviteWindowMs: number },
 ): void {
   const chat = renderChatView(root, {
@@ -113,6 +114,21 @@ function runSession(
         });
         chat.setComposerEnabled(false);
         break;
+      case "recovery-token": {
+        // Silently keep the address bar (and, while still shown, the share
+        // overlay's link/QR) in sync with the latest signed room-recovery
+        // capability — belt-and-suspenders for a full reload, on top of the
+        // in-memory Session already presenting it on same-tab rejoin.
+        const patched = buildShareLink(
+          location.origin,
+          route.pathToken,
+          route.fragment,
+          event.token,
+        );
+        history.replaceState(null, "", patched);
+        shareView?.updateLink(patched);
+        break;
+      }
       case "ended":
         document.removeEventListener("visibilitychange", onVisibility);
         shareView?.destroy();
@@ -134,7 +150,9 @@ async function startCreator(opts: CreateOptions): Promise<void> {
   const pathToken = await derivePathToken(fragmentSecret);
   const link = buildShareLink(location.origin, pathToken, fragment);
   // So a reload/crash after pairing can rejoin via the same recovery path a
-  // joiner already uses (the address bar otherwise never leaves "/").
+  // joiner already uses (the address bar otherwise never leaves "/"). Once
+  // the server issues a recovery token, the "recovery-token" event handler
+  // above patches this to include it.
   history.replaceState(null, "", link);
 
   const session = new Session({
@@ -145,11 +163,18 @@ async function startCreator(opts: CreateOptions): Promise<void> {
     inviteWindowMs: opts.inviteWindowMs,
     graceDurationMs: opts.graceDurationMs,
   });
-  runSession(session, { link, inviteWindowMs: opts.inviteWindowMs });
+  runSession(session, { pathToken, fragment }, {
+    link,
+    inviteWindowMs: opts.inviteWindowMs,
+  });
   await session.start();
 }
 
-async function startJoiner(pathToken: string, fragment: string): Promise<void> {
+async function startJoiner(
+  pathToken: string,
+  fragment: string,
+  recoveryToken?: string,
+): Promise<void> {
   // Spec §2: refuse before ANY network traffic if the fragment doesn't
   // re-derive the path token (catches mangled copy/paste).
   if (!(await fragmentMatchesPath(fragment, pathToken))) {
@@ -160,15 +185,16 @@ async function startJoiner(pathToken: string, fragment: string): Promise<void> {
     role: "joiner",
     fragmentSecret: base64urlToBytes(fragment),
     signalingUrl,
+    recoveryToken,
   });
-  runSession(session);
+  runSession(session, { pathToken, fragment });
   await session.start();
 }
 
 async function main(): Promise<void> {
   initTheme();
   renderSettings(document.body);
-  const route = parseRoute(location.pathname, location.hash);
+  const route = parseRoute(location.pathname, location.hash, location.search);
   switch (route.view) {
     case "create":
       renderCreateView(root, {
@@ -178,7 +204,7 @@ async function main(): Promise<void> {
       });
       break;
     case "join":
-      await startJoiner(route.pathToken, route.fragment);
+      await startJoiner(route.pathToken, route.fragment, route.recoveryToken);
       break;
     case "invalid-link":
       renderScreen(root, INVALID_LINK_SCREEN);
