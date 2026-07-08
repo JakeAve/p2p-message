@@ -27,7 +27,7 @@
 // only so the ICE config code path is realistic).
 
 import { type BrowserContext, chromium, type Page } from "playwright";
-import { assertEquals, assertMatch } from "@std/assert";
+import { assert, assertEquals, assertMatch } from "@std/assert";
 
 const SHARE_LINK_RE =
   /^https?:\/\/[^/]+\/r\/[A-Za-z0-9_-]{22}#[A-Za-z0-9_-]{43}$/;
@@ -88,11 +88,15 @@ function freePort(): number {
   return port;
 }
 
-/** Spawn `main.ts` as a child process in a STUN-only env; resolve when serving. */
-async function startServer(): Promise<
-  { baseUrl: string; stop: () => Promise<void> }
-> {
-  const port = freePort();
+/** Spawn `main.ts` as a child process in a STUN-only env; resolve when serving.
+ * `port`, if given, binds there instead of probing a fresh one — used to put
+ * a second server exactly where a first one used to be, simulating a real
+ * instance replacement (Deno Deploy isolate eviction/cold-start) rather than
+ * a brand-new deployment on a brand-new address. */
+async function startServer(
+  opts: { port?: number; roomRecoverySecret?: string } = {},
+): Promise<{ baseUrl: string; stop: () => Promise<void> }> {
+  const port = opts.port ?? freePort();
   const child = new Deno.Command(Deno.execPath(), {
     args: ["run", "--allow-net", "--allow-read", "--allow-env", "main.ts"],
     cwd: new URL("..", import.meta.url).pathname, // repo root
@@ -100,6 +104,9 @@ async function startServer(): Promise<
       PORT: String(port),
       ICE_STUN_SERVERS: "stun:stun.l.google.com:19302",
       ICE_TURN_SERVERS: "", // STUN-only: empty means "no TURN" (see Step 5)
+      ...(opts.roomRecoverySecret
+        ? { ROOM_RECOVERY_SECRET: opts.roomRecoverySecret }
+        : {}),
     },
     stdout: "inherit",
     stderr: "inherit",
@@ -184,6 +191,102 @@ Deno.test(
     } finally {
       // Close everything even on failure so Deno's op/resource sanitizers
       // (left at their defaults) come up clean.
+      await contextA?.close();
+      await contextB?.close();
+      await browser.close();
+      await server.stop();
+    }
+  },
+);
+
+Deno.test(
+  "recovery: instance replacement mid-chat recovers via signed token, not a reload",
+  async () => {
+    // This is the literal production bug this feature exists to fix: the
+    // process serving a room dies (here: we kill it outright and start a
+    // new one on the SAME port, standing in for a Deno Deploy isolate
+    // eviction/cold-start) — not a page reload, not a network drop. The
+    // two peers' actual chat (P2P WebRTC) is untouched by this; only the
+    // signaling server disappears and comes back with an empty room map.
+    const port = freePort();
+    const secret = "e2e-test-recovery-secret";
+    let server = await startServer({ port, roomRecoverySecret: secret });
+    const browser = await chromium.launch();
+    let contextA: BrowserContext | undefined;
+    let contextB: BrowserContext | undefined;
+    try {
+      contextA = await browser.newContext();
+      const pageA = await contextA.newPage();
+      await pageA.goto(`${server.baseUrl}/`);
+      await pageA.click('input[name="grace"][value="30000"]', {
+        timeout: UI_TIMEOUT_MS,
+      });
+      await pageA.click('[data-e2e="create"]', { timeout: UI_TIMEOUT_MS });
+
+      // The share link is first rendered without a recovery token (the
+      // token only exists once the server's "created" response comes back)
+      // and is patched in place moments later — see the "recovery-token"
+      // event handler in client/app.ts. Wait for that patch before reading,
+      // rather than racing it.
+      await pageA.waitForFunction(
+        () => {
+          const input = document.querySelector(
+            '[data-e2e="share-link"]',
+          ) as HTMLInputElement | null;
+          return !!input && input.value.includes("?rc=");
+        },
+        undefined,
+        { timeout: UI_TIMEOUT_MS },
+      );
+      const shareLink = await readText(pageA, '[data-e2e="share-link"]');
+      // The link now carries ?rc=<token> ahead of the fragment.
+      assert(
+        shareLink.includes("?rc="),
+        "share link should carry a recovery token",
+      );
+
+      contextB = await browser.newContext();
+      const pageB = await contextB.newPage();
+      await pageB.goto(shareLink);
+      await waitForStatus(pageA, "secure");
+      await waitForStatus(pageB, "secure");
+
+      const codeBeforeA = await readText(pageA, '[data-e2e="safety-code"]');
+      const codeBeforeB = await readText(pageB, '[data-e2e="safety-code"]');
+      assertEquals(codeBeforeA, codeBeforeB);
+
+      // --- Kill the server outright and start a brand-new process on the
+      // same port with an empty RoomRegistry, sharing only the secret. ---
+      await server.stop();
+      server = await startServer({ port, roomRecoverySecret: secret });
+
+      // Both peers' signaling sockets just died along with the old process;
+      // the client's existing signaling-lost handling should notice and
+      // rejoin automatically — no page interaction needed.
+      await waitForStatus(pageA, "reconnecting");
+      await waitForStatus(pageB, "reconnecting");
+      await waitForStatus(pageA, "secure", UI_TIMEOUT_MS);
+      await waitForStatus(pageB, "secure", UI_TIMEOUT_MS);
+
+      // Rekeyed (spec §8.3) — a fresh, still-matching safety code.
+      const codeAfterA = await readText(pageA, '[data-e2e="safety-code"]');
+      const codeAfterB = await readText(pageB, '[data-e2e="safety-code"]');
+      assertEquals(codeAfterA, codeAfterB);
+      assertMatch(codeAfterA, /^\d{6}$/);
+
+      // Chat still works against the new process.
+      const messageText =
+        `hello after instance replacement ${crypto.randomUUID()}`;
+      await pageB.fill('[data-e2e="composer"]', messageText, {
+        timeout: UI_TIMEOUT_MS,
+      });
+      await pageB.click('[data-e2e="send"]', { timeout: UI_TIMEOUT_MS });
+      await pageA
+        .locator('[data-e2e="message"]')
+        .filter({ hasText: messageText })
+        .first()
+        .waitFor({ state: "attached", timeout: UI_TIMEOUT_MS });
+    } finally {
       await contextA?.close();
       await contextB?.close();
       await browser.close();
