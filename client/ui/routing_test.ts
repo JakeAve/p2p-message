@@ -21,6 +21,25 @@ Deno.test("parseRoute: /r/:token with a well-formed fragment is a join", () => {
   });
 });
 
+Deno.test("parseRoute: a ?rc= query param is carried as recoveryToken", () => {
+  assertEquals(
+    parseRoute(`/r/${TOKEN}`, `#${FRAGMENT}`, "?rc=abc123"),
+    {
+      view: "join",
+      pathToken: TOKEN,
+      fragment: FRAGMENT,
+      recoveryToken: "abc123",
+    },
+  );
+});
+
+Deno.test("parseRoute: no ?rc= param means no recoveryToken field", () => {
+  assertEquals(
+    parseRoute(`/r/${TOKEN}`, `#${FRAGMENT}`),
+    { view: "join", pathToken: TOKEN, fragment: FRAGMENT },
+  );
+});
+
 Deno.test("parseRoute: join with a missing fragment is invalid-link", () => {
   assertEquals(parseRoute(`/r/${TOKEN}`, ""), { view: "invalid-link" });
   assertEquals(parseRoute(`/r/${TOKEN}`, "#"), { view: "invalid-link" });
@@ -45,6 +64,20 @@ Deno.test("parseRoute: anything else is not-found", () => {
 });
 
 Deno.test("buildShareLink assembles https://host/r/<token>#<fragment>", () => {
+  assertEquals(
+    buildShareLink("https://example.com", TOKEN, FRAGMENT),
+    `https://example.com/r/${TOKEN}#${FRAGMENT}`,
+  );
+});
+
+Deno.test("buildShareLink includes ?rc= before the fragment when a recoveryToken is given", () => {
+  assertEquals(
+    buildShareLink("https://example.com", TOKEN, FRAGMENT, "abc123"),
+    `https://example.com/r/${TOKEN}?rc=abc123#${FRAGMENT}`,
+  );
+});
+
+Deno.test("buildShareLink omits the query string entirely without a recoveryToken", () => {
   assertEquals(
     buildShareLink("https://example.com", TOKEN, FRAGMENT),
     `https://example.com/r/${TOKEN}#${FRAGMENT}`,

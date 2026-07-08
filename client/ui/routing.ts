@@ -6,16 +6,28 @@ const FRAGMENT_RE = /^[A-Za-z0-9_-]{43}$/;
 
 export type Route =
   | { view: "create" }
-  | { view: "join"; pathToken: string; fragment: string }
+  | {
+    view: "join";
+    pathToken: string;
+    fragment: string;
+    recoveryToken?: string;
+  }
   | { view: "invalid-link" }
   | { view: "not-found" };
 
 /**
- * Decide which view a URL addresses. Pure — pass `location.pathname` and
- * `location.hash`. A join URL whose token or fragment is malformed is
- * "invalid-link" (mangled copy/paste), not a 404.
+ * Decide which view a URL addresses. Pure — pass `location.pathname`,
+ * `location.hash`, and `location.search`. A join URL whose token or
+ * fragment is malformed is "invalid-link" (mangled copy/paste), not a 404.
+ * `search`'s `rc` param, if present, is a stateless room-recovery capability
+ * (docs/superpowers/specs/2026-07-07-stateless-room-recovery-design.md) —
+ * never secret, never part of the E2E key material in the hash.
  */
-export function parseRoute(pathname: string, hash: string): Route {
+export function parseRoute(
+  pathname: string,
+  hash: string,
+  search = "",
+): Route {
   if (pathname === "/") return { view: "create" };
   const match = pathname.match(/^\/r\/([^/]+)$/);
   if (!match) return { view: "not-found" };
@@ -24,16 +36,30 @@ export function parseRoute(pathname: string, hash: string): Route {
   if (!PATH_TOKEN_RE.test(pathToken) || !FRAGMENT_RE.test(fragment)) {
     return { view: "invalid-link" };
   }
-  return { view: "join", pathToken, fragment };
+  const recoveryToken = new URLSearchParams(search).get("rc");
+  return {
+    view: "join",
+    pathToken,
+    fragment,
+    ...(recoveryToken !== null ? { recoveryToken } : {}),
+  };
 }
 
-/** Full shareable link: https://host/r/<path-token>#<fragment-secret> (spec §2). */
+/**
+ * Full shareable link: https://host/r/<path-token>[?rc=<recovery-token>]#<fragment-secret>
+ * (spec §2; recovery token per the stateless-room-recovery design). The
+ * query string always precedes the hash fragment per URL syntax.
+ */
 export function buildShareLink(
   origin: string,
   pathToken: string,
   fragment: string,
+  recoveryToken?: string,
 ): string {
-  return `${origin}/r/${pathToken}#${fragment}`;
+  const query = recoveryToken !== undefined
+    ? `?rc=${encodeURIComponent(recoveryToken)}`
+    : "";
+  return `${origin}/r/${pathToken}${query}#${fragment}`;
 }
 
 /**
