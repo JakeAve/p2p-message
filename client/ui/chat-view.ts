@@ -167,6 +167,11 @@ export function renderChatView(
   const scrollToEnd = () => {
     messages.scrollTop = messages.scrollHeight;
   };
+  // Received messages/notes only pull the view down if it was already
+  // pinned to the bottom — otherwise someone scrolled up to reread earlier
+  // messages while composing keeps their place.
+  const isAtBottom = () =>
+    messages.scrollHeight - messages.scrollTop - messages.clientHeight < 24;
 
   // Delivery state (memory/DOM only, like the messages themselves): which
   // sent ids are delivered, plus the single Sent/Delivered label that tracks
@@ -256,6 +261,7 @@ export function renderChatView(
 
   return {
     addMessage(msg) {
+      const wasAtBottom = isAtBottom();
       const bubble = el("div", `msg ${msg.direction}`);
       bubble.dataset.e2e = "message";
       bubble.textContent = msg.text;
@@ -284,13 +290,14 @@ export function renderChatView(
         deliveryLabel.hidden = false;
         bubble.after(deliveryLabel); // label tracks the newest sent bubble
       }
-      scrollToEnd();
+      if (msg.direction === "sent" || wasAtBottom) scrollToEnd();
     },
     addSystemNote(text) {
+      const wasAtBottom = isAtBottom();
       const note = el("div", "msg system");
       note.textContent = text;
       messages.insertBefore(note, typingBubble);
-      scrollToEnd();
+      if (wasAtBottom) scrollToEnd();
     },
     setDelivered(id) {
       if (!sentDelivered.has(id)) return; // unknown id: no-op (spec)
@@ -299,7 +306,6 @@ export function renderChatView(
     },
     setPeerTyping(visible) {
       typingBubble.hidden = !visible;
-      if (visible) scrollToEnd();
     },
     setSafetyCode(code) {
       safetyCode.textContent = code;

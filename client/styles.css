@@ -60,7 +60,7 @@ body {
 }
 
 #app {
-  min-height: 100dvh;
+  min-height: var(--app-height, 100dvh);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -714,7 +714,7 @@ a.start-new {
 
   .card {
     max-width: none;
-    min-height: 100dvh;
+    min-height: var(--app-height, 100dvh);
     border: none;
     border-radius: 0;
     display: flex;
@@ -728,7 +728,7 @@ a.start-new {
   }
 
   .chat {
-    height: 100dvh;
+    height: var(--app-height, 100dvh);
     max-width: none;
     border: none;
     border-radius: 0;

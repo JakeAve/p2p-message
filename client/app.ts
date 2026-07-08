@@ -20,6 +20,7 @@ import {
   screenForEndReason,
 } from "./ui/screens.ts";
 import { initTheme } from "./ui/themes.ts";
+import { initViewportHeight } from "./ui/viewport.ts";
 import { renderSettings } from "./ui/settings-dialog.ts";
 import { TypingSender, TypingTracker } from "./ui/typing.ts";
 import { realTimers } from "./webrtc-client.ts";
@@ -213,6 +214,7 @@ async function startJoiner(
 
 async function main(): Promise<void> {
   initTheme();
+  initViewportHeight();
   renderSettings(document.body);
   const route = parseRoute(location.pathname, location.hash, location.search);
   switch (route.view) {
