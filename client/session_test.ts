@@ -838,3 +838,69 @@ Deno.test("wake() with no pending retry is a no-op", async () => {
   await flushAsync();
   assertEquals(transport.calls.length, callsBefore);
 });
+
+Deno.test("typing signals flow once secure and emit peer-typing", async () => {
+  const pair = await makeSecurePair();
+  const startAtB = waitForEvent(pair.b, "peer-typing");
+  pair.a.sendTyping(true);
+  assertEquals((await startAtB).active, true);
+  const stopAtB = waitForEvent(pair.b, "peer-typing");
+  pair.a.sendTyping(false);
+  assertEquals((await stopAtB).active, false);
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("sendTyping before secure is a silent no-op — nothing sent, no throw", async () => {
+  const { session, transport } = makeCreator();
+  await session.start(); // waiting-for-peer
+  session.sendTyping(true);
+  await flushAsync();
+  assertEquals(transport.sentData, []);
+  session.end();
+  await flushAsync();
+});
+
+Deno.test("typing payloads arriving before key-confirm are ignored, and never replayed after", async () => {
+  // Scripted peer as in the id-less chat test: pubkey exchange first, then a
+  // typing frame BEFORE our key-confirm goes out.
+  const { session, transport, fragmentSecret } = makeCreator();
+  const events = collect(session);
+  await session.start();
+  transport.emit({ type: "peer-joined", peerId: "joiner-peer" });
+  transport.emit({ type: "data-open" });
+  await flushAsync();
+
+  const sessionPub = (transport.sentData
+    .map((s) => JSON.parse(s))
+    .find((f) => f.type === "pubkey") as { key: string }).key;
+  const kp = await generateEcdhKeyPair();
+  const myPub = await exportPublicKeyRaw(kp.publicKey);
+  const shared = await deriveSharedSecret(
+    kp.privateKey,
+    await importPublicKeyRaw(sessionPub),
+  );
+  const key = await deriveSessionKey(fragmentSecret, shared);
+
+  transport.emit({
+    type: "data-message",
+    data: JSON.stringify({ v: 1, type: "pubkey", key: myPub }),
+  });
+  const typing = await encryptPayload(key, { type: "typing", active: true });
+  transport.emit({ type: "data-message", data: JSON.stringify(typing) });
+  await flushAsync();
+  assert(!events.some((e) => e.type === "peer-typing"));
+
+  // The session still completes the handshake afterwards.
+  const secured = waitForEvent(session, "secure");
+  const confirm = await encryptPayload(key, {
+    type: "key-confirm",
+    transcriptHash: await transcriptHash(myPub, sessionPub),
+  });
+  transport.emit({ type: "data-message", data: JSON.stringify(confirm) });
+  await secured;
+  assert(!events.some((e) => e.type === "peer-typing")); // still not replayed
+  session.end();
+  await flushAsync();
+});
