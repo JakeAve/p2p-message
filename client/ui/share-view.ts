@@ -4,6 +4,10 @@ import { createQrSvg } from "./qr.ts";
 
 export interface ShareView {
   destroy(): void;
+  /** Patch the displayed link + QR in place (e.g. once a recovery token
+   * arrives a moment after the share view was first rendered — see
+   * client/app.ts and the stateless-room-recovery design's §3). */
+  updateLink(link: string): void;
 }
 
 /**
@@ -32,11 +36,12 @@ export function renderShareView(
   linkInput.value = opts.link;
   linkInput.dataset.e2e = "share-link";
   linkInput.addEventListener("focus", () => linkInput.select());
+  let currentLink = opts.link;
   const copyBtn = el("button", "btn btn-primary");
   copyBtn.textContent = "Copy";
   copyBtn.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(opts.link);
+      await navigator.clipboard.writeText(currentLink);
       copyBtn.textContent = "Copied!";
       setTimeout(() => {
         copyBtn.textContent = "Copy";
@@ -76,6 +81,11 @@ export function renderShareView(
     destroy() {
       clearInterval(timer);
       overlay.remove();
+    },
+    updateLink(link: string) {
+      currentLink = link;
+      linkInput.value = link;
+      qr.innerHTML = createQrSvg(link);
     },
   };
 }
