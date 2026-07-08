@@ -50,6 +50,7 @@ function runSession(
       }
     },
     onEnd: () => session.end(),
+    onTyping: () => {}, // wired in the next commit
   });
   // Test hook only: initial data-status, before the first C5 status event.
   chat.setStatusAttr(session.status);

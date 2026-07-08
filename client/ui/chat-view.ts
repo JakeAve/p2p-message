@@ -1,12 +1,15 @@
 import { el } from "./dom.ts";
 import {
   formatCountdown,
+  formatMessageTime,
   MAX_MESSAGE_BYTES,
   utf8ByteLength,
 } from "./format.ts";
 import type { SessionStatus } from "../session.ts";
 
 export interface ChatMessage {
+  /** Present on sent messages (from sendChat) and id-carrying received ones. */
+  id?: string;
   text: string;
   direction: "sent" | "received";
   timestamp: number;
@@ -19,6 +22,10 @@ export type ChatStatus =
 export interface ChatViewController {
   addMessage(msg: ChatMessage): void;
   addSystemNote(text: string): void;
+  /** Flip a sent message to delivered (unknown ids are a no-op). */
+  setDelivered(id: string): void;
+  /** Show/hide the peer's typing dots. */
+  setPeerTyping(visible: boolean): void;
   setSafetyCode(code: string): void;
   setPeerName(name: string): void;
   setStatus(status: ChatStatus): void;
@@ -35,7 +42,12 @@ export interface ChatViewController {
  */
 export function renderChatView(
   root: HTMLElement,
-  handlers: { onSend(text: string): void; onEnd(): void },
+  handlers: {
+    onSend(text: string): void;
+    onEnd(): void;
+    /** Composer activity: called with whether it is now non-empty. */
+    onTyping(nonEmpty: boolean): void;
+  },
 ): ChatViewController {
   root.innerHTML = "";
   const view = el("div", "chat");
@@ -156,6 +168,33 @@ export function renderChatView(
     messages.scrollTop = messages.scrollHeight;
   };
 
+  // Delivery state (memory/DOM only, like the messages themselves): which
+  // sent ids are delivered, plus the single Sent/Delivered label that tracks
+  // the newest sent bubble (spec: quiet by default; older state via tap).
+  const sentDelivered = new Map<string, boolean>();
+  let latestSentId: string | null = null;
+  const deliveryLabel = el("div", "delivery-label");
+  deliveryLabel.dataset.e2e = "delivery-label";
+  deliveryLabel.hidden = true;
+
+  // Tap-to-reveal: at most one open reveal line at a time.
+  let openReveal: HTMLElement | null = null;
+  let openRevealFor: HTMLElement | null = null;
+  const closeReveal = () => {
+    openReveal?.remove();
+    openReveal = null;
+    openRevealFor = null;
+  };
+
+  // Typing dots: a ghost received-style bubble pinned last in the list.
+  const typingBubble = el("div", "msg received typing");
+  typingBubble.dataset.e2e = "typing-indicator";
+  typingBubble.setAttribute("role", "status");
+  typingBubble.setAttribute("aria-label", "The other person is typing");
+  typingBubble.append(el("span", "dot"), el("span", "dot"), el("span", "dot"));
+  typingBubble.hidden = true;
+  messages.append(typingBubble);
+
   // Composer with live UTF-8 byte counter.
   const composer = el("div", "composer");
   const row = el("div", "composer-row");
@@ -195,11 +234,13 @@ export function renderChatView(
     textarea.value = "";
     updateComposer();
     autosize();
+    handlers.onTyping(false);
     handlers.onSend(text);
   };
   textarea.addEventListener("input", () => {
     updateComposer();
     autosize();
+    handlers.onTyping(textarea.value.trim().length > 0);
   });
   sendBtn.addEventListener("click", send);
   textarea.addEventListener("keydown", (event) => {
@@ -218,20 +259,54 @@ export function renderChatView(
       const bubble = el("div", `msg ${msg.direction}`);
       bubble.dataset.e2e = "message";
       bubble.textContent = msg.text;
-      messages.append(bubble);
+      bubble.addEventListener("click", () => {
+        if (openRevealFor === bubble) {
+          closeReveal(); // second tap closes
+          return;
+        }
+        closeReveal();
+        const reveal = el("div", `msg-reveal ${msg.direction}`);
+        reveal.dataset.e2e = "msg-reveal";
+        let text = formatMessageTime(msg.timestamp);
+        if (msg.direction === "sent" && msg.id !== undefined) {
+          text += sentDelivered.get(msg.id) ? " · Delivered" : " · Sent";
+        }
+        reveal.textContent = text;
+        bubble.after(reveal);
+        openReveal = reveal;
+        openRevealFor = bubble;
+      });
+      messages.insertBefore(bubble, typingBubble); // dots stay last
+      if (msg.direction === "sent" && msg.id !== undefined) {
+        sentDelivered.set(msg.id, false);
+        latestSentId = msg.id;
+        deliveryLabel.textContent = "Sent";
+        deliveryLabel.hidden = false;
+        bubble.after(deliveryLabel); // label tracks the newest sent bubble
+      }
       scrollToEnd();
     },
     addSystemNote(text) {
       const note = el("div", "msg system");
       note.textContent = text;
-      messages.append(note);
+      messages.insertBefore(note, typingBubble);
       scrollToEnd();
+    },
+    setDelivered(id) {
+      if (!sentDelivered.has(id)) return; // unknown id: no-op (spec)
+      sentDelivered.set(id, true);
+      if (id === latestSentId) deliveryLabel.textContent = "Delivered";
+    },
+    setPeerTyping(visible) {
+      typingBubble.hidden = !visible;
+      if (visible) scrollToEnd();
     },
     setSafetyCode(code) {
       safetyCode.textContent = code;
     },
     setPeerName(name) {
       peerName.textContent = name;
+      typingBubble.setAttribute("aria-label", `${name} is typing`);
     },
     setStatus(status) {
       statusPill.className = `status-pill ${status.kind}`;

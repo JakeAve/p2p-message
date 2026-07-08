@@ -738,3 +738,54 @@ a.start-new {
     padding-right: 64px; /* clear the fixed 44px gear button */
   }
 }
+
+/* --- receipts, typing, tap-to-reveal --- */
+.msg {
+  cursor: pointer;
+}
+.delivery-label,
+.msg-reveal {
+  font-size: 11px;
+  color: var(--muted);
+}
+.delivery-label {
+  align-self: flex-end;
+}
+.msg-reveal.sent {
+  align-self: flex-end;
+}
+.msg-reveal.received {
+  align-self: flex-start;
+}
+.msg.typing {
+  cursor: default;
+}
+.msg.typing .dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  margin-right: 3px;
+  animation: typing-blink 1.2s infinite;
+}
+.msg.typing .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.msg.typing .dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes typing-blink {
+  0%, 60%, 100% {
+    opacity: 0.3;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg.typing .dot {
+    animation: none;
+    opacity: 0.6;
+  }
+}
