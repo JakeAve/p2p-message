@@ -84,6 +84,7 @@ Deno.test("createRoom / joinRoom / leaveRoom send exact protocol envelopes", asy
   const h = await connectedHarness();
   h.transport.createRoom("room-token-1", 600_000, 120_000);
   h.transport.joinRoom("room-token-1");
+  h.transport.joinRoom("room-token-1", "rc-abc123");
   h.transport.leaveRoom();
   assertEquals(h.sockets[0].sentJson(), [
     {
@@ -93,6 +94,7 @@ Deno.test("createRoom / joinRoom / leaveRoom send exact protocol envelopes", asy
       graceDurationMs: 120_000,
     },
     { type: "join", roomId: "room-token-1" },
+    { type: "join", roomId: "room-token-1", recoveryToken: "rc-abc123" },
     { type: "leave", roomId: "room-token-1" },
   ]);
 });
@@ -113,6 +115,20 @@ Deno.test("server messages map to transport events", async () => {
     { type: "peer-left", peerId: "p2" },
     { type: "server-error", code: "room-full" },
     { type: "room-closed", reason: "invite-expired" },
+  ]);
+});
+
+Deno.test("recoveryToken on created/joined/peer-joined is forwarded, omitted when absent", async () => {
+  const h = await connectedHarness();
+  h.transport.joinRoom("room-token-1");
+  const s = h.sockets[0];
+  s.receive({ type: "created", peerId: "p1" }); // no token: field must be absent, not undefined
+  s.receive({ type: "created", peerId: "p1", recoveryToken: "rc-1" });
+  s.receive({ type: "peer-joined", peerId: "p2", recoveryToken: "rc-2" });
+  assertEquals(h.events, [
+    { type: "created", peerId: "p1" },
+    { type: "created", peerId: "p1", recoveryToken: "rc-1" },
+    { type: "peer-joined", peerId: "p2", recoveryToken: "rc-2" },
   ]);
 });
 

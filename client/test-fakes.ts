@@ -222,8 +222,12 @@ export class FakeTransport implements Transport {
       queueMicrotask(() => this.emit(e));
     }
   }
-  joinRoom(roomId: string): void {
-    this.calls.push(`join:${roomId}`);
+  joinRoom(roomId: string, recoveryToken?: string): void {
+    this.calls.push(
+      recoveryToken !== undefined
+        ? `join:${roomId}:${recoveryToken}`
+        : `join:${roomId}`,
+    );
     for (const e of this.respondToJoin) {
       queueMicrotask(() => this.emit(e));
     }

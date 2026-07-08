@@ -72,14 +72,15 @@ export interface PeerConnectionLike {
 }
 
 export type TransportEvent =
-  | { type: "created"; peerId: string }
+  | { type: "created"; peerId: string; recoveryToken?: string }
   | {
     type: "joined";
     peerId: string;
     participants: string[];
     graceDurationMs: number;
+    recoveryToken?: string;
   }
-  | { type: "peer-joined"; peerId: string }
+  | { type: "peer-joined"; peerId: string; recoveryToken?: string }
   | { type: "peer-left"; peerId: string }
   | { type: "server-error"; code: ErrorCode }
   | { type: "room-closed"; reason: RoomClosedReason }
@@ -96,7 +97,7 @@ export interface Transport {
     inviteWindowMs: number,
     graceDurationMs: number,
   ): void;
-  joinRoom(roomId: string): void;
+  joinRoom(roomId: string, recoveryToken?: string): void;
   leaveRoom(): void;
   sendData(data: string): void;
   readonly dataOpen: boolean;
@@ -243,9 +244,13 @@ export class WebRTCTransport implements Transport {
     });
   }
 
-  joinRoom(roomId: string): void {
+  joinRoom(roomId: string, recoveryToken?: string): void {
     this.roomId = roomId;
-    this.sendEnvelope({ type: "join", roomId });
+    this.sendEnvelope({
+      type: "join",
+      roomId,
+      ...(recoveryToken !== undefined ? { recoveryToken } : {}),
+    });
   }
 
   leaveRoom(): void {
@@ -293,7 +298,13 @@ export class WebRTCTransport implements Transport {
     }
     switch (msg.type) {
       case "created":
-        this.emit({ type: "created", peerId: msg.peerId });
+        this.emit({
+          type: "created",
+          peerId: msg.peerId,
+          ...(msg.recoveryToken !== undefined
+            ? { recoveryToken: msg.recoveryToken }
+            : {}),
+        });
         break;
       case "joined":
         this.emit({
@@ -301,6 +312,9 @@ export class WebRTCTransport implements Transport {
           peerId: msg.peerId,
           participants: msg.participants,
           graceDurationMs: msg.graceDurationMs,
+          ...(msg.recoveryToken !== undefined
+            ? { recoveryToken: msg.recoveryToken }
+            : {}),
         });
         // Spec §5 convention: the newly-joined peer initiates the offer
         // to every peer already in the room (capacity 2 → at most one).
@@ -314,7 +328,13 @@ export class WebRTCTransport implements Transport {
         }
         break;
       case "peer-joined":
-        this.emit({ type: "peer-joined", peerId: msg.peerId });
+        this.emit({
+          type: "peer-joined",
+          peerId: msg.peerId,
+          ...(msg.recoveryToken !== undefined
+            ? { recoveryToken: msg.recoveryToken }
+            : {}),
+        });
         break;
       case "signal":
         void this.handleSignal(msg.from, msg.payload).catch(() =>
