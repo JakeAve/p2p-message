@@ -247,6 +247,8 @@ export function renderChatView(
     autosize();
     handlers.onTyping(textarea.value.trim().length > 0);
   });
+  // keep mobile keyboard alive with mousedown event
+  sendBtn.addEventListener("mousedown", (event) => event.preventDefault());
   sendBtn.addEventListener("click", send);
   textarea.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
