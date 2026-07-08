@@ -18,8 +18,8 @@
   --danger: #b42318;
   --ok: #008069;
   --warn: #8a6d00;
-  --radius: 10px;
-  --shadow: 0 1px 2px rgba(11, 20, 26, 0.1);
+  --radius: 0.625rem;
+  --shadow: 0 0.0625rem 0.125rem rgba(11, 20, 26, 0.1);
   --font-body:
     -apple-system,
     BlinkMacSystemFont,
@@ -53,35 +53,35 @@
 /* Faint doodle-style wallpaper dots on the message area. */
 [data-theme="whosapp"] .messages {
   background-image: radial-gradient(
-    rgba(11, 20, 26, 0.05) 1.5px,
-    transparent 1.5px
+    rgba(11, 20, 26, 0.05) 0.09375rem,
+    transparent 0.09375rem
   );
-  background-size: 22px 22px;
+  background-size: 1.375rem 1.375rem;
 }
 
 @media (prefers-color-scheme: dark) {
   [data-theme="whosapp"] .messages {
     background-image: radial-gradient(
-      rgba(233, 237, 239, 0.04) 1.5px,
-      transparent 1.5px
+      rgba(233, 237, 239, 0.04) 0.09375rem,
+      transparent 0.09375rem
     );
   }
 }
 
 /* Tighter WhatsApp bubble radius with a crisp tail-side corner. */
 [data-theme="whosapp"] .msg {
-  border-radius: 8px;
-  box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+  border-radius: 0.5rem;
+  box-shadow: 0 0.0625rem 0.03125rem rgba(11, 20, 26, 0.13);
 }
 
 [data-theme="whosapp"] .msg.sent {
-  border-bottom-right-radius: 2px;
+  border-bottom-right-radius: 0.125rem;
 }
 
 [data-theme="whosapp"] .msg.received {
   background: var(--surface);
   border: none;
-  border-bottom-left-radius: 2px;
+  border-bottom-left-radius: 0.125rem;
 }
 
 [data-theme="whosapp"] .msg.system {
@@ -134,7 +134,7 @@
 }
 
 [data-theme="whosapp"] .chat-header .btn-primary {
-  border: 1px solid rgba(255, 255, 255, 0.7);
+  border: 0.0625rem solid rgba(255, 255, 255, 0.7);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -177,6 +177,6 @@
   }
 
   [data-theme="whosapp"] .chat-header .btn-primary {
-    border: 1px solid transparent;
+    border: 0.0625rem solid transparent;
   }
 }

@@ -18,8 +18,8 @@
   --danger: #aa0000;
   --ok: #005a00;
   --warn: #5c4600;
-  --radius: 0px;
-  --shadow: 4px 4px 0 rgba(0, 0, 0, 0.45);
+  --radius: 0rem;
+  --shadow: 0.25rem 0.25rem 0 rgba(0, 0, 0, 0.45);
   --font-body: Chicago, Charcoal, Tahoma, "MS Sans Serif", Arial, sans-serif;
   --font-mono: "Courier New", Courier, monospace;
 }
@@ -28,8 +28,8 @@
 [data-theme="90s"] body {
   background-image: repeating-linear-gradient(
     45deg,
-    rgba(255, 255, 255, 0.05) 0 10px,
-    transparent 10px 20px
+    rgba(255, 255, 255, 0.05) 0 0.625rem,
+    transparent 0.625rem 1.25rem
   );
 }
 
@@ -37,14 +37,14 @@
 [data-theme="90s"] .btn,
 [data-theme="90s"] .preset-row span,
 [data-theme="90s"] .theme-select {
-  border: 2px outset #ffffff;
+  border: 0.125rem outset #ffffff;
 }
 
 /* Round chrome buttons go square-beveled, like tiny system controls. */
 [data-theme="90s"] .settings-btn,
 [data-theme="90s"] .safety-toggle,
 [data-theme="90s"] .settings-close {
-  border: 2px outset #ffffff;
+  border: 0.125rem outset #ffffff;
   border-radius: 0;
   background: var(--surface);
   color: var(--text);
@@ -58,12 +58,12 @@
 [data-theme="90s"] .field input[type="text"],
 [data-theme="90s"] .composer textarea,
 [data-theme="90s"] .share-link input {
-  border: 2px inset #ffffff;
+  border: 0.125rem inset #ffffff;
   background: #ffffff;
 }
 
 [data-theme="90s"] .msg.received {
-  border: 2px outset #ffffff;
+  border: 0.125rem outset #ffffff;
 }
 
 /* Cards, chat window and popups read as beveled system dialogs. */
@@ -72,7 +72,7 @@
 [data-theme="90s"] .settings-dialog,
 [data-theme="90s"] .safety-popover,
 [data-theme="90s"] .status-popover {
-  border: 2px outset #ffffff;
+  border: 0.125rem outset #ffffff;
 }
 
 /* Preset pills use the same solid navy selection as buttons/sent bubbles. */
@@ -84,6 +84,6 @@
 
 /* Keep the QR code on a plain white tile so it stays scannable. */
 [data-theme="90s"] .qr svg {
-  border: 2px inset #ffffff;
+  border: 0.125rem inset #ffffff;
   border-radius: 0;
 }

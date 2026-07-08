@@ -18,8 +18,8 @@
   --danger: #d70015;
   --ok: #1d8a3a;
   --warn: #a05e03;
-  --radius: 16px;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --radius: 1rem;
+  --shadow: 0 0.0625rem 0.1875rem rgba(0, 0, 0, 0.08);
   --font-body:
     -apple-system,
     BlinkMacSystemFont,
@@ -50,17 +50,17 @@
 
 /* Extra-round iMessage bubbles. */
 [data-theme="banana"] .msg {
-  border-radius: 18px;
+  border-radius: 1.125rem;
 }
 
 [data-theme="banana"] .msg.sent {
-  border-bottom-right-radius: 4px;
+  border-bottom-right-radius: 0.25rem;
 }
 
 [data-theme="banana"] .msg.received {
   background: #e9e9eb; /* iMessage gray bubble */
   border-color: #e9e9eb;
-  border-bottom-left-radius: 4px;
+  border-bottom-left-radius: 0.25rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -72,10 +72,10 @@
 
 /* Pill-shaped composer field and buttons, like the iMessage text box. */
 [data-theme="banana"] .composer textarea {
-  border-radius: 22px;
-  padding: 10px 16px;
+  border-radius: 1.375rem;
+  padding: 0.625rem 1rem;
 }
 
 [data-theme="banana"] .btn {
-  border-radius: 999px;
+  border-radius: 62.4375rem;
 }
