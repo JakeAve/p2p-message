@@ -9,21 +9,22 @@ export type ClientMessage =
     inviteWindowMs: number;
     graceDurationMs: number;
   }
-  | { type: "join"; roomId: string }
+  | { type: "join"; roomId: string; recoveryToken?: string }
   | { type: "signal"; roomId: string; to: string; payload: unknown } // SDP or ICE, opaque
   | { type: "leave"; roomId: string }
   | { type: "ping" };
 
 // Server → Client
 export type ServerMessage =
-  | { type: "created"; peerId: string }
+  | { type: "created"; peerId: string; recoveryToken?: string }
   | {
     type: "joined";
     peerId: string;
     participants: string[];
     graceDurationMs: number;
+    recoveryToken?: string;
   }
-  | { type: "peer-joined"; peerId: string }
+  | { type: "peer-joined"; peerId: string; recoveryToken?: string }
   | { type: "signal"; from: string; payload: unknown }
   | { type: "peer-left"; peerId: string }
   | { type: "error"; code: ErrorCode }
