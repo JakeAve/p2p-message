@@ -494,6 +494,15 @@ Deno.test(
       await pageA
         .locator('[data-e2e="attachment-save"][download="data.bin"]')
         .waitFor({ state: "visible", timeout: UI_TIMEOUT_MS });
+
+      // --- binary file gets the tile+Save path only — no image preview ---
+      const dataBinAttachment = pageA.locator('[data-e2e="attachment"]')
+        .filter({
+          has: pageA.locator(
+            '[data-e2e="attachment-save"][download="data.bin"]',
+          ),
+        });
+      assertEquals(await dataBinAttachment.locator("img").count(), 0);
     } finally {
       await contextA?.close();
       await contextB?.close();
