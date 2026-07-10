@@ -1,6 +1,7 @@
 import { el } from "./dom.ts";
 import {
   formatCountdown,
+  formatFileSize,
   formatMessageTime,
   MAX_MESSAGE_BYTES,
   utf8ByteLength,
@@ -19,6 +20,14 @@ export type ChatStatus =
   | { kind: "connecting" | "securing" | "secure" | "waiting" }
   | { kind: "reconnecting"; msRemaining: number };
 
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  size: number;
+  mime: string;
+  direction: "sent" | "received";
+}
+
 export interface ChatViewController {
   addMessage(msg: ChatMessage): void;
   addSystemNote(text: string): void;
@@ -32,7 +41,46 @@ export interface ChatViewController {
   /** Test hook only: reflects C5's raw SessionStatus as `data-status`. */
   setStatusAttr(status: SessionStatus): void;
   setComposerEnabled(enabled: boolean): void;
+  /** Render a pending attachment bubble with a progress ring and cancel. */
+  addAttachment(att: ChatAttachment): void;
+  setAttachmentProgress(
+    id: string,
+    bytesDone: number,
+    bytesTotal: number,
+  ): void;
+  /** Swap the ring for an inline preview/tile plus a Save link. */
+  completeAttachment(id: string, blob: Blob): void;
+  failAttachment(
+    id: string,
+    opts: { message: string; canRetry: boolean },
+  ): void;
+  /** Revoke the object URL and remove the bubble (used by retry). */
+  removeAttachment(id: string): void;
   destroy(): void;
+}
+
+const RING_RADIUS = 15;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function makeProgressRing(): { svg: SVGSVGElement; fill: SVGCircleElement } {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 36 36");
+  svg.setAttribute("class", "progress-ring");
+  svg.dataset.e2e = "attachment-progress";
+  const track = document.createElementNS(SVG_NS, "circle");
+  track.setAttribute("class", "ring-track");
+  const fill = document.createElementNS(SVG_NS, "circle");
+  fill.setAttribute("class", "ring-fill");
+  for (const c of [track, fill]) {
+    c.setAttribute("cx", "18");
+    c.setAttribute("cy", "18");
+    c.setAttribute("r", String(RING_RADIUS));
+  }
+  fill.style.strokeDasharray = String(RING_CIRCUMFERENCE);
+  fill.style.strokeDashoffset = String(RING_CIRCUMFERENCE);
+  svg.append(track, fill);
+  return { svg, fill };
 }
 
 /**
@@ -44,6 +92,9 @@ export function renderChatView(
   root: HTMLElement,
   handlers: {
     onSend(text: string): void;
+    onSendFiles(files: File[]): void;
+    onCancelAttachment(id: string): void;
+    onRetryAttachment(id: string): void;
     onEnd(): void;
     /** Composer activity: called with whether it is now non-empty. */
     onTyping(nonEmpty: boolean): void;
@@ -182,6 +233,26 @@ export function renderChatView(
   deliveryLabel.dataset.e2e = "delivery-label";
   deliveryLabel.hidden = true;
 
+  // Attachment bubbles: pending progress ring -> preview/tile + Save link.
+  type AttachmentRecord = {
+    bubble: HTMLElement;
+    body: HTMLElement;
+    ringFill: SVGCircleElement | null;
+    direction: "sent" | "received";
+    name: string;
+    size: number;
+    mime: string;
+    objectUrl: string | null;
+  };
+  const attachmentById = new Map<string, AttachmentRecord>();
+
+  // Full-size image overlay (one shared <dialog>).
+  const imageOverlay = el("dialog", "image-overlay");
+  const overlayImg = el("img") as HTMLImageElement;
+  overlayImg.alt = "";
+  imageOverlay.append(overlayImg);
+  imageOverlay.addEventListener("click", () => imageOverlay.close());
+
   // Tap-to-reveal: at most one open reveal line at a time.
   let openReveal: HTMLElement | null = null;
   let openRevealFor: HTMLElement | null = null;
@@ -210,11 +281,28 @@ export function renderChatView(
   const sendBtn = el("button", "btn btn-primary");
   sendBtn.textContent = "Send";
   sendBtn.dataset.e2e = "send";
-  row.append(textarea, sendBtn);
+  const fileInput = el("input") as HTMLInputElement;
+  fileInput.type = "file";
+  fileInput.multiple = true;
+  fileInput.hidden = true;
+  fileInput.dataset.e2e = "file-input";
+  const attachBtn = el("button", "btn attach-btn");
+  attachBtn.textContent = "+";
+  attachBtn.dataset.e2e = "attach";
+  attachBtn.setAttribute("aria-label", "Send a file");
+  // keep mobile keyboard alive, same as the send button
+  attachBtn.addEventListener("mousedown", (event) => event.preventDefault());
+  attachBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    const files = Array.from(fileInput.files ?? []);
+    fileInput.value = "";
+    if (files.length > 0) handlers.onSendFiles(files);
+  });
+  row.append(attachBtn, textarea, sendBtn);
   const meta = el("div", "composer-meta");
   const counter = el("span", "counter");
   meta.append(counter);
-  composer.append(row, meta);
+  composer.append(row, meta, fileInput);
 
   let composerEnabled = false;
   const updateComposer = () => {
@@ -222,6 +310,7 @@ export function renderChatView(
     counter.textContent = `${bytes} / ${MAX_MESSAGE_BYTES} bytes`;
     counter.classList.toggle("over", bytes > MAX_MESSAGE_BYTES);
     textarea.disabled = !composerEnabled;
+    attachBtn.disabled = !composerEnabled;
     sendBtn.disabled = !composerEnabled ||
       textarea.value.trim().length === 0 ||
       bytes > MAX_MESSAGE_BYTES;
@@ -258,7 +347,7 @@ export function renderChatView(
   });
   updateComposer();
 
-  view.append(header, messages, composer, endDialog);
+  view.append(header, messages, composer, endDialog, imageOverlay);
   root.append(view);
 
   return {
@@ -365,9 +454,144 @@ export function renderChatView(
       composerEnabled = enabled;
       updateComposer();
     },
+    addAttachment(att) {
+      const wasAtBottom = isAtBottom();
+      const bubble = el("div", `msg ${att.direction} attachment`);
+      bubble.dataset.e2e = "attachment";
+      bubble.dataset.id = att.id;
+      const body = el("div", "attachment-body");
+      const { svg, fill } = makeProgressRing();
+      const info = el("div", "attachment-info");
+      const nameEl = el("div", "attachment-name");
+      nameEl.textContent = att.name;
+      const sizeEl = el("div", "attachment-size");
+      sizeEl.textContent = formatFileSize(att.size);
+      info.append(nameEl, sizeEl);
+      const cancelBtn = el("button", "attachment-cancel");
+      cancelBtn.dataset.e2e = "attachment-cancel";
+      cancelBtn.setAttribute("aria-label", "Cancel transfer");
+      cancelBtn.textContent = "×";
+      cancelBtn.addEventListener(
+        "click",
+        () => handlers.onCancelAttachment(att.id),
+      );
+      body.append(svg, info, cancelBtn);
+      bubble.append(body);
+      attachmentById.set(att.id, {
+        bubble,
+        body,
+        ringFill: fill,
+        direction: att.direction,
+        name: att.name,
+        size: att.size,
+        mime: att.mime,
+        objectUrl: null,
+      });
+      messages.insertBefore(bubble, typingBubble);
+      if (att.direction === "sent") {
+        sentDelivered.set(att.id, false);
+        latestSentId = att.id;
+        deliveryLabel.textContent = "Sent";
+        deliveryLabel.hidden = false;
+        bubble.after(deliveryLabel);
+      }
+      if (att.direction === "sent" || wasAtBottom) scrollToEnd();
+    },
+    setAttachmentProgress(id, bytesDone, bytesTotal) {
+      const rec = attachmentById.get(id);
+      if (!rec?.ringFill || bytesTotal === 0) return;
+      const fraction = Math.min(1, bytesDone / bytesTotal);
+      rec.ringFill.style.strokeDashoffset = String(
+        RING_CIRCUMFERENCE * (1 - fraction),
+      );
+    },
+    completeAttachment(id, blob) {
+      const rec = attachmentById.get(id);
+      if (!rec) return;
+      const wasAtBottom = isAtBottom();
+      const url = URL.createObjectURL(blob);
+      rec.objectUrl = url;
+      rec.ringFill = null;
+      rec.body.innerHTML = "";
+      if (rec.mime.startsWith("image/")) {
+        const img = el("img", "attachment-preview") as HTMLImageElement;
+        img.src = url;
+        img.alt = rec.name;
+        img.addEventListener("click", () => {
+          overlayImg.src = url;
+          imageOverlay.showModal();
+        });
+        rec.body.append(img);
+      } else if (rec.mime.startsWith("video/")) {
+        const video = el("video", "attachment-preview") as HTMLVideoElement;
+        video.controls = true;
+        video.src = url;
+        rec.body.append(video);
+      } else if (rec.mime.startsWith("audio/")) {
+        const audio = el("audio") as HTMLAudioElement;
+        audio.controls = true;
+        audio.src = url;
+        rec.body.append(audio);
+      }
+      const tile = el("div", "attachment-tile");
+      const info = el("div", "attachment-info");
+      const nameEl = el("div", "attachment-name");
+      nameEl.textContent = rec.name;
+      const sizeEl = el("div", "attachment-size");
+      sizeEl.textContent = formatFileSize(rec.size);
+      info.append(nameEl, sizeEl);
+      const save = el("a", "btn attachment-save") as HTMLAnchorElement;
+      save.dataset.e2e = "attachment-save";
+      save.textContent = "Save";
+      save.href = url;
+      save.download = rec.name;
+      tile.append(info, save);
+      rec.body.append(tile);
+      if (wasAtBottom) scrollToEnd();
+    },
+    failAttachment(id, opts) {
+      const rec = attachmentById.get(id);
+      if (!rec) return;
+      rec.ringFill = null;
+      rec.bubble.classList.add("attachment-failed");
+      rec.body.innerHTML = "";
+      const info = el("div", "attachment-info");
+      const nameEl = el("div", "attachment-name");
+      nameEl.textContent = rec.name;
+      const note = el("div", "attachment-fail-note");
+      note.textContent = opts.message;
+      info.append(nameEl, note);
+      rec.body.append(info);
+      if (opts.canRetry) {
+        const retry = el("button", "btn attachment-retry");
+        retry.dataset.e2e = "attachment-retry";
+        retry.textContent = "Retry";
+        retry.addEventListener("click", () => handlers.onRetryAttachment(id));
+        rec.body.append(retry);
+      }
+    },
+    removeAttachment(id) {
+      const rec = attachmentById.get(id);
+      if (!rec) return;
+      if (rec.objectUrl) URL.revokeObjectURL(rec.objectUrl);
+      // The label is a SIBLING placed via bubble.after(deliveryLabel):
+      // removing the bubble would leave it floating, so park it if it
+      // currently tracks this bubble.
+      if (latestSentId === id) {
+        latestSentId = null;
+        deliveryLabel.hidden = true;
+        deliveryLabel.remove();
+      }
+      sentDelivered.delete(id);
+      rec.bubble.remove();
+      attachmentById.delete(id);
+    },
     destroy() {
       document.removeEventListener("click", onDocumentClick);
       document.removeEventListener("keydown", onDocumentKeydown);
+      for (const rec of attachmentById.values()) {
+        if (rec.objectUrl) URL.revokeObjectURL(rec.objectUrl);
+      }
       view.remove();
     },
   };

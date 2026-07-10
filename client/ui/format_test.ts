@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import {
   formatCountdown,
+  formatFileSize,
   formatMessageTime,
   MAX_MESSAGE_BYTES,
   utf8ByteLength,
@@ -36,4 +37,13 @@ Deno.test("formatMessageTime renders hour and minute for the given locale", () =
   const t = new Date(2026, 6, 8, 15, 42).getTime();
   assertEquals(formatMessageTime(t, "en-US"), "3:42 PM");
   assertEquals(formatMessageTime(t, "de-DE"), "15:42");
+});
+
+Deno.test("formatFileSize: bytes, KB, MB with sensible precision", () => {
+  assertEquals(formatFileSize(0), "0 B");
+  assertEquals(formatFileSize(512), "512 B");
+  assertEquals(formatFileSize(1536), "1.5 KB");
+  assertEquals(formatFileSize(200 * 1024), "200 KB");
+  assertEquals(formatFileSize(1024 * 1024 * 1.5), "1.5 MB");
+  assertEquals(formatFileSize(48 * 1024 * 1024), "48 MB");
 });

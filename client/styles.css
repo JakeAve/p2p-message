@@ -505,6 +505,121 @@ h1 {
   text-align: center;
 }
 
+/* --- Attachments --- */
+.attach-btn {
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  padding: 0;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.msg.attachment {
+  max-width: min(75%, 20rem);
+}
+
+.attachment-body {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.progress-ring {
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  transform: rotate(-90deg);
+}
+
+.progress-ring circle {
+  fill: none;
+  stroke-width: 3;
+}
+
+.progress-ring .ring-track {
+  stroke: currentColor;
+  opacity: 0.2;
+}
+
+.progress-ring .ring-fill {
+  stroke: currentColor;
+  transition: stroke-dashoffset 0.15s linear;
+}
+
+.attachment-info {
+  min-width: 0;
+}
+
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-size,
+.attachment-fail-note {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.attachment-cancel {
+  flex: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0.25rem;
+  color: inherit;
+  opacity: 0.7;
+}
+
+.attachment-preview {
+  display: block;
+  max-width: 100%;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+video.attachment-preview {
+  cursor: default;
+}
+
+.attachment-tile {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.attachment-save {
+  flex: none;
+  text-decoration: none;
+}
+
+.attachment-failed {
+  opacity: 0.6;
+}
+
+.image-overlay {
+  border: none;
+  background: transparent;
+  padding: 0;
+  max-width: 95vw;
+  max-height: 95vh;
+}
+
+.image-overlay img {
+  max-width: 95vw;
+  max-height: 95vh;
+  display: block;
+}
+
+.image-overlay::backdrop {
+  background: rgb(0 0 0 / 0.7);
+}
+
 /* ===== Composer ===== */
 .composer {
   border-top: 0.0625rem solid var(--border);

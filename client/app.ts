@@ -4,7 +4,7 @@ import {
   derivePathToken,
   generateFragmentSecret,
 } from "./crypto.ts";
-import { SendUnavailableError, Session } from "./session.ts";
+import { FileRejectedError, SendUnavailableError, Session } from "./session.ts";
 import {
   buildShareLink,
   fragmentMatchesPath,
@@ -56,9 +56,51 @@ function runSession(
         }
       }
     },
+    onSendFiles: (files) => sendFiles(files),
+    onCancelAttachment: (id) => session.cancelFile(id),
+    onRetryAttachment: (id) => retryFile(id),
     onTyping: (nonEmpty) => typingSender.update(nonEmpty),
     onEnd: () => session.end(),
   });
+  // Sender-side File handles, kept for Retry (spec §3: resend from scratch).
+  const sentFiles = new Map<string, File>();
+  const sendFiles = (files: File[]) => {
+    for (const file of files) sendOneFile(file);
+  };
+  const sendOneFile = (file: File) => {
+    try {
+      const id = session.sendFile(file);
+      sentFiles.set(id, file);
+      chat.addAttachment({
+        id,
+        name: file.name,
+        size: file.size,
+        mime: file.type || "application/octet-stream",
+        direction: "sent",
+      });
+    } catch (error) {
+      if (error instanceof FileRejectedError) {
+        chat.addSystemNote(
+          error.reason === "too-large"
+            ? `"${file.name}" is larger than 50 MB and wasn't sent.`
+            : `"${file.name}" is empty and wasn't sent.`,
+        );
+      } else if (error instanceof SendUnavailableError) {
+        chat.addSystemNote(
+          "File not sent — the other person is unreachable right now.",
+        );
+      } else {
+        throw error;
+      }
+    }
+  };
+  const retryFile = (id: string) => {
+    const file = sentFiles.get(id);
+    if (!file) return;
+    sentFiles.delete(id);
+    chat.removeAttachment(id);
+    sendOneFile(file);
+  };
   const peerTyping = new TypingTracker(
     realTimers,
     (visible) => chat.setPeerTyping(visible),
