@@ -14,7 +14,8 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "content-security-policy":
     `default-src 'self'; script-src 'self' '${THEME_BOOT_SCRIPT_HASH}'; ` +
     "style-src 'self'; " +
-    "connect-src 'self' ws: wss:; img-src 'self' data:; frame-ancestors 'none'",
+    "connect-src 'self' ws: wss:; img-src 'self' data: blob:; " +
+    "media-src 'self' blob:; frame-ancestors 'none'",
   "referrer-policy": "no-referrer",
   "x-content-type-options": "nosniff",
 };
