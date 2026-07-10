@@ -1,12 +1,25 @@
 // client/file-transfer_test.ts
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
   type ChunkSink,
+  FileReceiveJob,
   FileSendJob,
   SEND_HIGH_WATER_BYTES,
+  validateOffer,
 } from "./file-transfer.ts";
-import { decryptFileChunk, generateMessageId } from "./crypto.ts";
-import { CHUNK_BYTES, type Payload } from "../shared/wire.ts";
+import {
+  decryptFileChunk,
+  encryptFileChunk,
+  generateMessageId,
+  sha256Base64url,
+} from "./crypto.ts";
+import {
+  CHUNK_BYTES,
+  chunkCountFor,
+  type FileOffer,
+  MAX_FILE_BYTES,
+  type Payload,
+} from "../shared/wire.ts";
 import { flushAsync } from "./test-fakes.ts";
 
 function makeAesKey(): Promise<CryptoKey> {
@@ -109,4 +122,100 @@ Deno.test("FileSendJob: stop() while parked ends the run without file-done", asy
   assertEquals(job.stopReason, "cancelled");
   assertEquals(sink.frames.length, 0);
   assertEquals(controls.filter((c) => c.type === "file-done"), []);
+});
+
+function offerFor(bytes: Uint8Array, id: string): FileOffer {
+  return {
+    type: "file-offer",
+    id,
+    name: "data.bin",
+    mime: "application/octet-stream",
+    size: bytes.length,
+    chunkSize: CHUNK_BYTES,
+    chunkCount: chunkCountFor(bytes.length),
+  };
+}
+
+async function framesFor(
+  bytes: Uint8Array,
+  id: string,
+  key: CryptoKey,
+): Promise<ArrayBuffer[]> {
+  const frames: ArrayBuffer[] = [];
+  for (let seq = 0; seq < chunkCountFor(bytes.length); seq++) {
+    const end = Math.min(bytes.length, (seq + 1) * CHUNK_BYTES);
+    frames.push(
+      await encryptFileChunk(
+        key,
+        id,
+        seq,
+        bytes.subarray(seq * CHUNK_BYTES, end),
+      ),
+    );
+  }
+  return frames;
+}
+
+Deno.test("validateOffer: accepts a sane offer, rejects each violation", () => {
+  const good = offerFor(new Uint8Array(100), generateMessageId());
+  assertEquals(validateOffer(good), null);
+  assertEquals(validateOffer({ ...good, size: 0 }), "empty");
+  assertEquals(
+    validateOffer({ ...good, size: MAX_FILE_BYTES + 1 }),
+    "too-large",
+  );
+  assertEquals(validateOffer({ ...good, name: "" }), "bad-name");
+  assertEquals(validateOffer({ ...good, name: "x".repeat(256) }), "bad-name");
+  assertEquals(validateOffer({ ...good, chunkSize: 1024 }), "bad-chunking");
+  assertEquals(validateOffer({ ...good, chunkCount: 99 }), "bad-chunking");
+});
+
+Deno.test("FileReceiveJob: reassembles, verifies hash, builds the Blob", async () => {
+  const key = await makeAesKey();
+  const id = generateMessageId();
+  const bytes = crypto.getRandomValues(new Uint8Array(CHUNK_BYTES + 7));
+  const job = new FileReceiveJob(offerFor(bytes, id), key);
+  const progress: number[] = [];
+  for (const frame of await framesFor(bytes, id, key)) {
+    const res = await job.acceptFrame(frame);
+    assert(res.match);
+    progress.push(res.bytesDone);
+  }
+  assertEquals(progress, [CHUNK_BYTES, bytes.length]);
+  const blob = await job.finish(await sha256Base64url(bytes));
+  assertEquals(new Uint8Array(await blob.arrayBuffer()), bytes);
+  assertEquals(blob.type, "application/octet-stream");
+});
+
+Deno.test("FileReceiveJob: a chunk for another transfer id is a non-matching no-op", async () => {
+  const key = await makeAesKey();
+  const bytes = new Uint8Array(10);
+  const job = new FileReceiveJob(offerFor(bytes, generateMessageId()), key);
+  const stray = await encryptFileChunk(key, generateMessageId(), 0, bytes);
+  assertEquals(await job.acceptFrame(stray), { match: false });
+});
+
+Deno.test("FileReceiveJob: out-of-order seq throws", async () => {
+  const key = await makeAesKey();
+  const id = generateMessageId();
+  const bytes = new Uint8Array(CHUNK_BYTES * 2);
+  const job = new FileReceiveJob(offerFor(bytes, id), key);
+  const frames = await framesFor(bytes, id, key);
+  await assertRejects(() => job.acceptFrame(frames[1])); // expected seq 0
+});
+
+Deno.test("FileReceiveJob: finish with a wrong hash throws; finish incomplete throws", async () => {
+  const key = await makeAesKey();
+  const id = generateMessageId();
+  const bytes = crypto.getRandomValues(new Uint8Array(64));
+  const job = new FileReceiveJob(offerFor(bytes, id), key);
+  await assertRejects(() =>
+    job.finish("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+  );
+  for (const frame of await framesFor(bytes, id, key)) {
+    await job.acceptFrame(frame);
+  }
+  await assertRejects(() =>
+    job.finish("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+  );
 });

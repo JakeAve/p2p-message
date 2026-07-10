@@ -2,8 +2,19 @@
 // Pure file-transfer logic (spec §3): chunking/pacing on the send side,
 // validation/reassembly on the receive side. No session or DOM knowledge;
 // session.ts owns wiring these to the transport and its event stream.
-import { CHUNK_BYTES, chunkCountFor, type Payload } from "../shared/wire.ts";
-import { encryptFileChunk, sha256Base64url } from "./crypto.ts";
+import {
+  CHUNK_BYTES,
+  chunkCountFor,
+  type FileOffer,
+  MAX_FILE_BYTES,
+  MAX_FILE_NAME_CHARS,
+  type Payload,
+} from "../shared/wire.ts";
+import {
+  decryptFileChunk,
+  encryptFileChunk,
+  sha256Base64url,
+} from "./crypto.ts";
 
 export type FileFailReason = "cancelled" | "error" | "disconnected";
 
@@ -105,5 +116,96 @@ export class FileSendJob {
     const resolve = this.drainResolve;
     this.drainResolve = null;
     resolve?.();
+  }
+}
+
+export type OfferProblem = "empty" | "too-large" | "bad-name" | "bad-chunking";
+
+/** Receiver-side offer validation (spec §3) — defense in depth. */
+export function validateOffer(offer: FileOffer): OfferProblem | null {
+  if (!Number.isInteger(offer.size) || offer.size <= 0) return "empty";
+  if (offer.size > MAX_FILE_BYTES) return "too-large";
+  if (offer.name.length === 0 || offer.name.length > MAX_FILE_NAME_CHARS) {
+    return "bad-name";
+  }
+  if (
+    offer.chunkSize !== CHUNK_BYTES ||
+    offer.chunkCount !== chunkCountFor(offer.size)
+  ) {
+    return "bad-chunking";
+  }
+  return null;
+}
+
+export type AcceptResult = { match: false } | {
+  match: true;
+  bytesDone: number;
+};
+
+export class FileReceiveJob {
+  readonly id: string;
+  readonly name: string;
+  readonly mime: string;
+  readonly size: number;
+  private readonly key: CryptoKey;
+  private chunks: Uint8Array[] = [];
+  private bytesReceived = 0;
+  private nextSeq = 0;
+
+  constructor(offer: FileOffer, key: CryptoKey) {
+    this.id = offer.id;
+    this.name = offer.name;
+    this.mime = offer.mime;
+    this.size = offer.size;
+    this.key = key;
+  }
+
+  /**
+   * Decrypt and store one binary frame. A decryptable chunk addressed to a
+   * DIFFERENT transfer id is a stale straggler (e.g. sent before our cancel
+   * reached the peer): reported as non-matching, not an error. Throws on
+   * decrypt failure, out-of-order seq, or byte overflow — all fatal for
+   * this transfer.
+   */
+  async acceptFrame(frame: ArrayBuffer): Promise<AcceptResult> {
+    const { transferId, seq, bytes } = await decryptFileChunk(this.key, frame);
+    if (transferId !== this.id) return { match: false };
+    if (seq !== this.nextSeq) {
+      throw new Error(
+        `chunk out of order: got ${seq}, expected ${this.nextSeq}`,
+      );
+    }
+    if (this.bytesReceived + bytes.length > this.size) {
+      throw new Error("received more bytes than offered");
+    }
+    this.chunks.push(bytes);
+    this.nextSeq++;
+    this.bytesReceived += bytes.length;
+    return { match: true, bytesDone: this.bytesReceived };
+  }
+
+  /** Verify completeness + hash, assemble the Blob. Throws on mismatch. */
+  async finish(sha256: string): Promise<Blob> {
+    if (
+      this.bytesReceived !== this.size ||
+      this.nextSeq !== chunkCountFor(this.size)
+    ) {
+      throw new Error("file-done before all chunks arrived");
+    }
+    const all = new Uint8Array(this.size);
+    let offset = 0;
+    for (const chunk of this.chunks) {
+      all.set(chunk, offset);
+      offset += chunk.length;
+    }
+    if ((await sha256Base64url(all)) !== sha256) {
+      throw new Error("file hash mismatch");
+    }
+    return new Blob([all], { type: this.mime });
+  }
+
+  /** Drop buffered bytes immediately (cancel/disconnect — spec §3). */
+  discard(): void {
+    this.chunks = [];
   }
 }
