@@ -508,6 +508,7 @@ h1 {
 /* --- Attachments --- */
 .attach-btn {
   flex: none;
+  align-self: center;
   width: 2.25rem;
   height: 2.25rem;
   border-radius: 50%;
