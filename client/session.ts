@@ -2,6 +2,7 @@
 // The single API the UI talks to (contract C5). Wraps signaling + WebRTC
 // (via the Transport interface) + crypto into a status-driven state machine.
 import {
+  BinaryFrameError,
   decryptPayload,
   derivePathToken,
   deriveSafetyCode,
@@ -32,7 +33,12 @@ import {
   type TransportEvent,
   WebRTCTransport,
 } from "./webrtc-client.ts";
-import { type FileFailReason, FileSendJob } from "./file-transfer.ts";
+import {
+  type FileFailReason,
+  FileReceiveJob,
+  FileSendJob,
+  validateOffer,
+} from "./file-transfer.ts";
 
 export type SessionStatus =
   | "connecting" // signaling socket + room create/join in flight
@@ -177,6 +183,7 @@ export class Session {
 
   // File transfers (spec §3): one active per direction, senders queue FIFO.
   private activeSend: FileSendJob | null = null;
+  private activeReceive: FileReceiveJob | null = null;
   private sendQueue: { id: string; file: File }[] = [];
   // Guards against a race: activeSend is only assigned deep inside
   // drainSendQueue(), after an `await file.arrayBuffer()`. Without this flag,
@@ -285,6 +292,18 @@ export class Session {
         type: "file-failed",
         id,
         direction: "send",
+        reason: "cancelled",
+      });
+    }
+    if (this.activeReceive?.id === id) {
+      const job = this.activeReceive;
+      this.activeReceive = null;
+      job.discard();
+      this.sendFileControl({ type: "file-cancel", id, reason: "receiver" });
+      this.emit({
+        type: "file-failed",
+        id,
+        direction: "receive",
         reason: "cancelled",
       });
     }
@@ -421,6 +440,9 @@ export class Session {
         break;
       case "data-message":
         await this.handleRaw(e.data);
+        break;
+      case "data-binary":
+        await this.handleBinary(e.data);
         break;
       case "data-closed":
       case "peer-left":
@@ -587,10 +609,10 @@ export class Session {
       if (!this.confirmVerified) this.failHandshake();
       return;
     }
-    this.handlePayload(payload);
+    await this.handlePayload(payload);
   }
 
-  private handlePayload(payload: Payload): void {
+  private async handlePayload(payload: Payload): Promise<void> {
     switch (payload.type) {
       case "key-confirm":
         if (
@@ -639,11 +661,73 @@ export class Session {
           this.finish("peer-ended");
         }
         break;
+      case "file-offer": {
+        const key = this.sessionKey;
+        if (!this.confirmVerified || !key) break;
+        if (this.activeReceive !== null || validateOffer(payload) !== null) {
+          this.sendFileControl({
+            type: "file-cancel",
+            id: payload.id,
+            reason: "error",
+          });
+          break;
+        }
+        this.activeReceive = new FileReceiveJob(payload, key);
+        this.emit({
+          type: "file-incoming",
+          id: payload.id,
+          name: payload.name,
+          mime: payload.mime,
+          size: payload.size,
+        });
+        break;
+      }
+      case "file-done": {
+        const job = this.activeReceive;
+        if (!this.confirmVerified || !job || job.id !== payload.id) break;
+        this.activeReceive = null;
+        try {
+          const blob = await job.finish(payload.sha256);
+          this.emit({
+            type: "file-complete",
+            id: job.id,
+            blob,
+            name: job.name,
+            mime: job.mime,
+          });
+          this.sendFileControl({ type: "file-received", id: job.id });
+        } catch {
+          job.discard();
+          this.sendFileControl({
+            type: "file-cancel",
+            id: job.id,
+            reason: "error",
+          });
+          this.emit({
+            type: "file-failed",
+            id: job.id,
+            direction: "receive",
+            reason: "error",
+          });
+        }
+        break;
+      }
       case "file-cancel":
-        if (this.confirmVerified && this.activeSend?.id === payload.id) {
+        if (!this.confirmVerified) break;
+        if (this.activeSend?.id === payload.id) {
           this.activeSend.stop(
             payload.reason === "error" ? "error" : "cancelled",
           );
+        } else if (this.activeReceive?.id === payload.id) {
+          const job = this.activeReceive;
+          this.activeReceive = null;
+          job.discard();
+          this.emit({
+            type: "file-failed",
+            id: job.id,
+            direction: "receive",
+            reason: payload.reason === "error" ? "error" : "cancelled",
+          });
         }
         break;
       case "file-received":
@@ -651,6 +735,45 @@ export class Session {
           this.emit({ type: "file-delivered", id: payload.id });
         }
         break;
+    }
+  }
+
+  /** A binary frame is always a file chunk (spec §1). No active receive →
+   * stale straggler from a cancelled transfer: drop silently. An unknown
+   * binary version byte is a version-mismatch at any stage, mirroring
+   * handleRaw's treatment of JSON wire versions (spec §1). */
+  private async handleBinary(frame: ArrayBuffer): Promise<void> {
+    const job = this.activeReceive;
+    if (!job || !this.confirmVerified) return;
+    try {
+      const res = await job.acceptFrame(frame);
+      if (!res.match) return;
+      this.emit({
+        type: "file-progress",
+        id: job.id,
+        direction: "receive",
+        bytesDone: res.bytesDone,
+        bytesTotal: job.size,
+      });
+    } catch (err) {
+      if (err instanceof BinaryFrameError && err.code === "bad-version") {
+        this.failHandshake("version-mismatch");
+        return;
+      }
+      // Decrypt failure, out-of-order, or overflow: fatal for this transfer.
+      this.activeReceive = null;
+      job.discard();
+      this.sendFileControl({
+        type: "file-cancel",
+        id: job.id,
+        reason: "error",
+      });
+      this.emit({
+        type: "file-failed",
+        id: job.id,
+        direction: "receive",
+        reason: "error",
+      });
     }
   }
 
@@ -763,6 +886,17 @@ export class Session {
         type: "file-failed",
         id: q.id,
         direction: "send",
+        reason: "disconnected",
+      });
+    }
+    if (this.activeReceive) {
+      const job = this.activeReceive;
+      this.activeReceive = null;
+      job.discard();
+      this.emit({
+        type: "file-failed",
+        id: job.id,
+        direction: "receive",
         reason: "disconnected",
       });
     }

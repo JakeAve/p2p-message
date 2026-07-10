@@ -923,112 +923,100 @@ Deno.test("sendFile: refuses when not secure; refuses empty and oversize files",
   await flushAsync();
 });
 
-// The four tests below all wait on the RECEIVING session's file-complete /
-// file-delivered / file-incoming events. Those only fire once Task 7 wires
-// file-offer / binary-frame / file-done handling into session.ts's
-// handlePayload and handleEvent — neither exists yet (confirmed: no
-// "data-binary" case in handleEvent, no "file-offer"/"file-done" case in
-// handlePayload). The brief's own note called out only the last two
-// (cancelFile / disconnect) as needing Task 7, but running the suite showed
-// the "peer sees offer..." and "two files queue FIFO..." tests time out for
-// the same reason (they also await pair.b's file-complete / file-delivered
-// via pair.a). Commented out here, per the brief's stated preference for
-// strictly green commits; enable all four in the receive-side task (Task 7).
-//
-// Deno.test("sendFile: peer sees offer, chunks, and done; sender gets progress; ack emits file-delivered", async () => {
-//   const pair = await makeSecurePair();
-//   const eventsA = collect(pair.a);
-//   const bytes = crypto.getRandomValues(new Uint8Array(20_000)); // 2 chunks
-//   const completeB = waitForEvent(pair.b, "file-complete");
-//   const deliveredA = waitForEvent(pair.a, "file-delivered");
-//   const id = pair.a.sendFile(
-//     new File([bytes], "pic.png", { type: "image/png" }),
-//   );
-//   assertEquals(id.length, 11);
-//   const complete = await completeB;
-//   assertEquals(complete.id, id);
-//   assertEquals(complete.name, "pic.png");
-//   assertEquals(complete.mime, "image/png");
-//   assertEquals(new Uint8Array(await complete.blob.arrayBuffer()), bytes);
-//   assertEquals((await deliveredA).id, id);
-//   const progress = eventsA.filter((e) => e.type === "file-progress");
-//   assert(progress.length >= 2);
-//   assertEquals(progress.at(-1), {
-//     type: "file-progress",
-//     id,
-//     direction: "send",
-//     bytesDone: 20_000,
-//     bytesTotal: 20_000,
-//   });
-//   pair.a.end();
-//   pair.b.end();
-//   await flushAsync();
-// });
-//
-// Deno.test("sendFile: two files queue FIFO and both complete in order", async () => {
-//   const pair = await makeSecurePair();
-//   const completed: string[] = [];
-//   pair.b.on((e) => {
-//     if (e.type === "file-complete") completed.push(e.id);
-//   });
-//   const id1 = pair.a.sendFile(new File([new Uint8Array(100)], "one.bin"));
-//   const id2 = pair.a.sendFile(new File([new Uint8Array(100)], "two.bin"));
-//   await waitForEvent(pair.a, "file-delivered");
-//   await flushAsync();
-//   assertEquals(completed, [id1, id2]);
-//   pair.a.end();
-//   pair.b.end();
-//   await flushAsync();
-// });
-//
-// Deno.test("cancelFile: sender cancel stops the transfer and fails it on both ends", async () => {
-//   const pair = await makeSecurePair();
-//   // Park the sender in backpressure so the transfer is mid-flight.
-//   pair.ta.bufferedAmount = 10_000_000;
-//   const failedA = waitForEvent(pair.a, "file-failed");
-//   const failedB = waitForEvent(pair.b, "file-failed");
-//   const id = pair.a.sendFile(
-//     new File([new Uint8Array(100_000)], "big.bin"),
-//   );
-//   await waitForEvent(pair.b, "file-incoming");
-//   pair.a.cancelFile(id);
-//   assertEquals(await failedA, {
-//     type: "file-failed",
-//     id,
-//     direction: "send",
-//     reason: "cancelled",
-//   });
-//   assertEquals(await failedB, {
-//     type: "file-failed",
-//     id,
-//     direction: "receive",
-//     reason: "cancelled",
-//   });
-//   pair.a.end();
-//   pair.b.end();
-//   await flushAsync();
-// });
-//
-// Deno.test("disconnect mid-transfer fails active and queued sends with 'disconnected'", async () => {
-//   const pair = await makeSecurePair();
-//   pair.ta.bufferedAmount = 10_000_000; // park the active job
-//   const failures: SessionEvent[] = [];
-//   pair.a.on((e) => {
-//     if (e.type === "file-failed") failures.push(e);
-//   });
-//   const id1 = pair.a.sendFile(new File([new Uint8Array(100_000)], "a.bin"));
-//   const id2 = pair.a.sendFile(new File([new Uint8Array(100)], "b.bin"));
-//   await waitForEvent(pair.b, "file-incoming");
-//   pair.ta.emit({ type: "peer-left", peerId: "joiner-peer" }); // grace begins
-//   await flushAsync();
-//   assertEquals(
-//     failures.map((f) => f.type === "file-failed" && [f.id, f.reason]),
-//     [[id2, "disconnected"], [id1, "disconnected"]],
-//   );
-//   pair.a.end();
-//   pair.b.end();
-//   await flushAsync();
-// });
+Deno.test("sendFile: peer sees offer, chunks, and done; sender gets progress; ack emits file-delivered", async () => {
+  const pair = await makeSecurePair();
+  const eventsA = collect(pair.a);
+  const bytes = crypto.getRandomValues(new Uint8Array(20_000)); // 2 chunks
+  const completeB = waitForEvent(pair.b, "file-complete");
+  const deliveredA = waitForEvent(pair.a, "file-delivered");
+  const id = pair.a.sendFile(
+    new File([bytes], "pic.png", { type: "image/png" }),
+  );
+  assertEquals(id.length, 11);
+  const complete = await completeB;
+  assertEquals(complete.id, id);
+  assertEquals(complete.name, "pic.png");
+  assertEquals(complete.mime, "image/png");
+  assertEquals(new Uint8Array(await complete.blob.arrayBuffer()), bytes);
+  assertEquals((await deliveredA).id, id);
+  const progress = eventsA.filter((e) => e.type === "file-progress");
+  assert(progress.length >= 2);
+  assertEquals(progress.at(-1), {
+    type: "file-progress",
+    id,
+    direction: "send",
+    bytesDone: 20_000,
+    bytesTotal: 20_000,
+  });
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("sendFile: two files queue FIFO and both complete in order", async () => {
+  const pair = await makeSecurePair();
+  const completed: string[] = [];
+  pair.b.on((e) => {
+    if (e.type === "file-complete") completed.push(e.id);
+  });
+  const id1 = pair.a.sendFile(new File([new Uint8Array(100)], "one.bin"));
+  const id2 = pair.a.sendFile(new File([new Uint8Array(100)], "two.bin"));
+  await waitForEvent(pair.a, "file-delivered");
+  await flushAsync();
+  assertEquals(completed, [id1, id2]);
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("cancelFile: sender cancel stops the transfer and fails it on both ends", async () => {
+  const pair = await makeSecurePair();
+  // Park the sender in backpressure so the transfer is mid-flight.
+  pair.ta.bufferedAmount = 10_000_000;
+  const failedA = waitForEvent(pair.a, "file-failed");
+  const failedB = waitForEvent(pair.b, "file-failed");
+  const id = pair.a.sendFile(
+    new File([new Uint8Array(100_000)], "big.bin"),
+  );
+  await waitForEvent(pair.b, "file-incoming");
+  pair.a.cancelFile(id);
+  assertEquals(await failedA, {
+    type: "file-failed",
+    id,
+    direction: "send",
+    reason: "cancelled",
+  });
+  assertEquals(await failedB, {
+    type: "file-failed",
+    id,
+    direction: "receive",
+    reason: "cancelled",
+  });
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("disconnect mid-transfer fails active and queued sends with 'disconnected'", async () => {
+  const pair = await makeSecurePair();
+  pair.ta.bufferedAmount = 10_000_000; // park the active job
+  const failures: SessionEvent[] = [];
+  pair.a.on((e) => {
+    if (e.type === "file-failed") failures.push(e);
+  });
+  const id1 = pair.a.sendFile(new File([new Uint8Array(100_000)], "a.bin"));
+  const id2 = pair.a.sendFile(new File([new Uint8Array(100)], "b.bin"));
+  await waitForEvent(pair.b, "file-incoming");
+  pair.ta.emit({ type: "peer-left", peerId: "joiner-peer" }); // grace begins
+  await flushAsync();
+  assertEquals(
+    failures.map((f) => f.type === "file-failed" && [f.id, f.reason]),
+    [[id2, "disconnected"], [id1, "disconnected"]],
+  );
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
 
 // Sender-side-only coverage for this task's actual deliverables (chunking,
 // progress, FIFO queueing, cancel, interruption) that does NOT depend on the
@@ -1138,5 +1126,40 @@ Deno.test("disconnect mid-transfer fails active and queued sends with 'disconnec
     [[id2, "disconnected"], [id1, "disconnected"]],
   );
   pair.a.end();
+  await flushAsync();
+});
+
+Deno.test("receiver cancel: sender's transfer stops; both ends emit file-failed", async () => {
+  const pair = await makeSecurePair();
+  pair.ta.bufferedAmount = 10_000_000; // park sender mid-transfer
+  const failedA = waitForEvent(pair.a, "file-failed");
+  const failedB = waitForEvent(pair.b, "file-failed");
+  const id = pair.a.sendFile(new File([new Uint8Array(100_000)], "big.bin"));
+  const incoming = await waitForEvent(pair.b, "file-incoming");
+  assertEquals(incoming, {
+    type: "file-incoming",
+    id,
+    name: "big.bin",
+    mime: "application/octet-stream",
+    size: 100_000,
+  });
+  pair.b.cancelFile(id);
+  assertEquals((await failedB).reason, "cancelled");
+  assertEquals((await failedA).reason, "cancelled");
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("receiver interruption: grace discards the partial transfer", async () => {
+  const pair = await makeSecurePair();
+  pair.ta.bufferedAmount = 10_000_000;
+  pair.a.sendFile(new File([new Uint8Array(100_000)], "big.bin"));
+  const failedB = waitForEvent(pair.b, "file-failed");
+  await waitForEvent(pair.b, "file-incoming");
+  pair.tb.emit({ type: "peer-left", peerId: "creator-peer" });
+  assertEquals((await failedB).reason, "disconnected");
+  pair.a.end();
+  pair.b.end();
   await flushAsync();
 });
