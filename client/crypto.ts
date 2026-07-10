@@ -1,4 +1,5 @@
 import {
+  BINARY_FRAME_VERSION,
   type EncryptedFrame,
   type Payload,
   WIRE_VERSION,
@@ -195,4 +196,80 @@ export async function decryptPayload(
   );
   const plaintext = unpadPlaintext(new Uint8Array(padded));
   return JSON.parse(new TextDecoder().decode(plaintext)) as Payload;
+}
+
+// --- File transfer framing (spec §1) ---
+// Binary data-channel frame: [1B version | 12B IV | AES-GCM ciphertext].
+// Authenticated plaintext:   [8B transfer id | 4B seq (uint32 BE) | chunk].
+// The id/seq live INSIDE the plaintext so chunks cannot be reordered or
+// cross-wired between transfers without failing decryption.
+
+const CHUNK_HEADER_BYTES = 12; // 8B id + 4B seq
+const FRAME_HEADER_BYTES = 13; // 1B version + 12B IV
+const GCM_TAG_BYTES = 16;
+
+export class BinaryFrameError extends Error {
+  code: "bad-version" | "bad-frame";
+
+  constructor(code: "bad-version" | "bad-frame") {
+    super(`binary frame error: ${code}`);
+    this.name = "BinaryFrameError";
+    this.code = code;
+  }
+}
+
+export async function encryptFileChunk(
+  key: CryptoKey,
+  transferId: string,
+  seq: number,
+  chunk: Uint8Array,
+): Promise<ArrayBuffer> {
+  const idBytes = base64urlToBytes(transferId); // 8 bytes (generateMessageId)
+  const plaintext = new Uint8Array(CHUNK_HEADER_BYTES + chunk.length);
+  plaintext.set(idBytes, 0);
+  new DataView(plaintext.buffer).setUint32(8, seq, false);
+  plaintext.set(chunk, CHUNK_HEADER_BYTES);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext),
+  );
+  const frame = new Uint8Array(FRAME_HEADER_BYTES + ct.length);
+  frame[0] = BINARY_FRAME_VERSION;
+  frame.set(iv, 1);
+  frame.set(ct, FRAME_HEADER_BYTES);
+  return frame.buffer;
+}
+
+export async function decryptFileChunk(
+  key: CryptoKey,
+  frame: ArrayBuffer,
+): Promise<{ transferId: string; seq: number; bytes: Uint8Array }> {
+  const view = new Uint8Array(frame);
+  if (view.length >= 1 && view[0] !== BINARY_FRAME_VERSION) {
+    throw new BinaryFrameError("bad-version");
+  }
+  if (view.length < FRAME_HEADER_BYTES + CHUNK_HEADER_BYTES + GCM_TAG_BYTES) {
+    throw new BinaryFrameError("bad-frame");
+  }
+  const iv = view.slice(1, FRAME_HEADER_BYTES);
+  const ct = view.slice(FRAME_HEADER_BYTES);
+  let plain: ArrayBuffer;
+  try {
+    plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
+  } catch {
+    throw new BinaryFrameError("bad-frame");
+  }
+  const p = new Uint8Array(plain);
+  return {
+    transferId: bytesToBase64url(p.slice(0, 8)),
+    seq: new DataView(plain).getUint32(8, false),
+    bytes: p.slice(CHUNK_HEADER_BYTES),
+  };
+}
+
+export async function sha256Base64url(
+  bytes: Uint8Array<ArrayBuffer>,
+): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return bytesToBase64url(new Uint8Array(digest));
 }

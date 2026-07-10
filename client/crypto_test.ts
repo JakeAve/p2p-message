@@ -1,4 +1,5 @@
 import {
+  assert,
   assertEquals,
   assertMatch,
   assertNotEquals,
@@ -7,12 +8,15 @@ import {
 } from "@std/assert";
 import {
   base64urlToBytes,
+  BinaryFrameError,
   bytesToBase64url,
+  decryptFileChunk,
   decryptPayload,
   derivePathToken,
   deriveSafetyCode,
   deriveSessionKey,
   deriveSharedSecret,
+  encryptFileChunk,
   encryptPayload,
   exportPublicKeyRaw,
   generateEcdhKeyPair,
@@ -20,10 +24,15 @@ import {
   generateMessageId,
   importPublicKeyRaw,
   padPlaintext,
+  sha256Base64url,
   transcriptHash,
   unpadPlaintext,
 } from "./crypto.ts";
-import { parseFrame, type Payload } from "../shared/wire.ts";
+import {
+  BINARY_FRAME_VERSION,
+  parseFrame,
+  type Payload,
+} from "../shared/wire.ts";
 import { MAX_MESSAGE_BYTES } from "./ui/format.ts";
 
 Deno.test("generateFragmentSecret returns 32 bytes, fresh each call", () => {
@@ -397,4 +406,83 @@ Deno.test("a maximum-length chat message with an id still fits the largest bucke
   };
   const plaintext = new TextEncoder().encode(JSON.stringify(p));
   assertEquals(padPlaintext(plaintext).length, 4096);
+});
+
+function makeAesKey(): Promise<CryptoKey> {
+  return crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  ) as Promise<CryptoKey>;
+}
+
+Deno.test("file chunk frame: encrypt/decrypt round-trip preserves id, seq, bytes", async () => {
+  const key = await makeAesKey();
+  const id = generateMessageId();
+  const chunk = crypto.getRandomValues(new Uint8Array(16_384));
+  const frame = await encryptFileChunk(key, id, 41, chunk);
+  assertEquals(new Uint8Array(frame)[0], BINARY_FRAME_VERSION);
+  const out = await decryptFileChunk(key, frame);
+  assertEquals(out.transferId, id);
+  assertEquals(out.seq, 41);
+  assertEquals(out.bytes, chunk);
+});
+
+Deno.test("file chunk frame: wrong key fails as bad-frame", async () => {
+  const frame = await encryptFileChunk(
+    await makeAesKey(),
+    generateMessageId(),
+    0,
+    new Uint8Array([1, 2, 3]),
+  );
+  const otherKey = await makeAesKey();
+  const err = await assertRejects(() => decryptFileChunk(otherKey, frame));
+  assert(err instanceof BinaryFrameError);
+  assertEquals(err.code, "bad-frame");
+});
+
+Deno.test("file chunk frame: tampered ciphertext fails as bad-frame", async () => {
+  const key = await makeAesKey();
+  const frame = await encryptFileChunk(
+    key,
+    generateMessageId(),
+    0,
+    new Uint8Array([9, 9, 9]),
+  );
+  const tampered = new Uint8Array(frame).slice();
+  tampered[tampered.length - 1] ^= 0xff;
+  const err = await assertRejects(() => decryptFileChunk(key, tampered.buffer));
+  assert(err instanceof BinaryFrameError);
+  assertEquals(err.code, "bad-frame");
+});
+
+Deno.test("file chunk frame: unknown version byte fails as bad-version", async () => {
+  const key = await makeAesKey();
+  const frame = new Uint8Array(
+    await encryptFileChunk(key, generateMessageId(), 0, new Uint8Array([1])),
+  ).slice();
+  frame[0] = 99;
+  const err = await assertRejects(() => decryptFileChunk(key, frame.buffer));
+  assert(err instanceof BinaryFrameError);
+  assertEquals(err.code, "bad-version");
+});
+
+Deno.test("file chunk frame: truncated frame fails as bad-frame", async () => {
+  const key = await makeAesKey();
+  const err = await assertRejects(() =>
+    decryptFileChunk(key, new Uint8Array([BINARY_FRAME_VERSION, 1, 2]).buffer)
+  );
+  assert(err instanceof BinaryFrameError);
+  assertEquals(err.code, "bad-frame");
+});
+
+Deno.test("sha256Base64url: NIST vector for 'abc'", async () => {
+  // SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+  const hex =
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+  const expected = bytesToBase64url(
+    new Uint8Array(hex.match(/../g)!.map((h) => parseInt(h, 16))),
+  );
+  const hash = await sha256Base64url(new TextEncoder().encode("abc"));
+  assertEquals(hash, expected);
 });
