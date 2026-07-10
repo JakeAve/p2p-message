@@ -43,11 +43,15 @@ export interface WebSocketLike {
 /** Structural subset of RTCDataChannel so tests can fake it. */
 export interface DataChannelLike {
   readyState: string;
-  send(data: string): void;
+  binaryType: string;
+  bufferedAmount: number;
+  bufferedAmountLowThreshold: number;
+  send(data: string | ArrayBuffer): void;
   close(): void;
   onopen: (() => void) | null;
   onmessage: ((ev: { data: unknown }) => void) | null;
   onclose: (() => void) | null;
+  onbufferedamountlow: (() => void) | null;
 }
 
 /** Structural subset of RTCPeerConnection so tests can fake it. */
@@ -87,6 +91,7 @@ export type TransportEvent =
   | { type: "data-open" }
   | { type: "data-closed" }
   | { type: "data-message"; data: string }
+  | { type: "data-binary"; data: ArrayBuffer }
   | { type: "signaling-lost" };
 
 /** What client/session.ts consumes. FakeTransport in test-fakes.ts implements this too. */
@@ -100,7 +105,11 @@ export interface Transport {
   joinRoom(roomId: string, recoveryToken?: string): void;
   leaveRoom(): void;
   sendData(data: string): void;
+  sendBinary(data: ArrayBuffer): void;
   readonly dataOpen: boolean;
+  readonly bufferedAmount: number;
+  /** Fires when the channel's bufferedAmount drops to its low threshold. */
+  onBufferedAmountLow(listener: () => void): () => void;
   close(): void;
   onEvent(listener: (e: TransportEvent) => void): () => void;
 }
@@ -117,6 +126,9 @@ export interface WebRTCTransportDeps {
   fetchIceServers?: (url: string) => Promise<RTCIceServer[]>;
   timers?: TimerApi;
 }
+
+/** Receiver-side resume signal for chunk pacing (spec §2). */
+export const BUFFERED_LOW_THRESHOLD_BYTES = 262_144; // 256 KB
 
 /** ws(s)://host/ws → http(s)://host/api/ice-servers */
 export function iceServersUrlFrom(signalingUrl: string): string {
@@ -146,6 +158,7 @@ export class WebRTCTransport implements Transport {
   private readonly fetchIceServers: (url: string) => Promise<RTCIceServer[]>;
   private readonly timers: TimerApi;
   private readonly listeners = new Set<(e: TransportEvent) => void>();
+  private readonly lowListeners = new Set<() => void>();
 
   private ws: WebSocketLike | null = null;
   private iceServers: RTCIceServer[] = [];
@@ -262,6 +275,22 @@ export class WebRTCTransport implements Transport {
       throw new Error("data channel is not open");
     }
     this.channel.send(data);
+  }
+
+  sendBinary(data: ArrayBuffer): void {
+    if (!this.channel || !this.channelOpen) {
+      throw new Error("data channel is not open");
+    }
+    this.channel.send(data);
+  }
+
+  get bufferedAmount(): number {
+    return this.channel?.bufferedAmount ?? 0;
+  }
+
+  onBufferedAmountLow(listener: () => void): () => void {
+    this.lowListeners.add(listener);
+    return () => this.lowListeners.delete(listener);
   }
 
   close(): void {
@@ -413,12 +442,21 @@ export class WebRTCTransport implements Transport {
 
   private attachDataChannel(channel: DataChannelLike): void {
     this.channel = channel;
+    channel.binaryType = "arraybuffer";
+    channel.bufferedAmountLowThreshold = BUFFERED_LOW_THRESHOLD_BYTES;
+    channel.onbufferedamountlow = () => {
+      for (const listener of [...this.lowListeners]) listener();
+    };
     channel.onopen = () => {
       this.channelOpen = true;
       this.emit({ type: "data-open" });
     };
     channel.onmessage = (ev) => {
-      this.emit({ type: "data-message", data: String(ev.data) });
+      if (ev.data instanceof ArrayBuffer) {
+        this.emit({ type: "data-binary", data: ev.data });
+      } else {
+        this.emit({ type: "data-message", data: String(ev.data) });
+      }
     };
     channel.onclose = () => this.handleDataClosed();
   }

@@ -109,13 +109,19 @@ export class FakeWebSocket implements WebSocketLike {
 
 export class FakeDataChannel implements DataChannelLike {
   readyState = "connecting";
+  binaryType = "blob";
+  bufferedAmount = 0;
+  bufferedAmountLowThreshold = 0;
   sent: string[] = [];
+  sentBinary: ArrayBuffer[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((ev: { data: unknown }) => void) | null = null;
   onclose: (() => void) | null = null;
+  onbufferedamountlow: (() => void) | null = null;
 
-  send(data: string): void {
-    this.sent.push(data);
+  send(data: string | ArrayBuffer): void {
+    if (typeof data === "string") this.sent.push(data);
+    else this.sentBinary.push(data);
   }
   close(): void {
     this.readyState = "closed";
@@ -126,9 +132,17 @@ export class FakeDataChannel implements DataChannelLike {
     this.readyState = "open";
     this.onopen?.();
   }
-  /** Test hook: a frame arrived from the peer. */
+  /** Test hook: a string frame arrived from the peer. */
   receive(data: string): void {
     this.onmessage?.({ data });
+  }
+  /** Test hook: a binary frame arrived from the peer. */
+  receiveBinary(data: ArrayBuffer): void {
+    this.onmessage?.({ data });
+  }
+  /** Test hook: bufferedAmount fell to the low threshold. */
+  fireBufferedAmountLow(): void {
+    this.onbufferedamountlow?.();
   }
 }
 
@@ -189,6 +203,8 @@ export class FakeTransport implements Transport {
   peer: FakeTransport | null = null;
   calls: string[] = [];
   sentData: string[] = [];
+  sentBinary: ArrayBuffer[] = [];
+  bufferedAmount = 0;
   connectError: Error | null = null;
   /** Events auto-emitted (next microtask) after createRoom is called. */
   respondToCreate: TransportEvent[] = [{
@@ -205,6 +221,7 @@ export class FakeTransport implements Transport {
 
   private open = false;
   private listeners = new Set<(e: TransportEvent) => void>();
+  private lowListeners = new Set<() => void>();
 
   connect(): Promise<void> {
     this.calls.push("connect");
@@ -242,6 +259,22 @@ export class FakeTransport implements Transport {
     if (peer) {
       queueMicrotask(() => peer.emit({ type: "data-message", data }));
     }
+  }
+  sendBinary(data: ArrayBuffer): void {
+    if (!this.open) throw new Error("data channel is not open");
+    this.sentBinary.push(data);
+    const peer = this.peer;
+    if (peer) {
+      queueMicrotask(() => peer.emit({ type: "data-binary", data }));
+    }
+  }
+  onBufferedAmountLow(listener: () => void): () => void {
+    this.lowListeners.add(listener);
+    return () => this.lowListeners.delete(listener);
+  }
+  /** Test hook: scripted backpressure release. */
+  fireBufferedAmountLow(): void {
+    for (const listener of [...this.lowListeners]) listener();
   }
   get dataOpen(): boolean {
     return this.open;

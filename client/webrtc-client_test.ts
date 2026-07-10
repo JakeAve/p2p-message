@@ -1,6 +1,7 @@
 // client/webrtc-client_test.ts
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
+  BUFFERED_LOW_THRESHOLD_BYTES,
   iceServersUrlFrom,
   type TransportEvent,
   WebRTCTransport,
@@ -333,4 +334,49 @@ Deno.test("connectionState failed closes the channel path (data-closed)", async 
   h.pcs[0].onconnectionstatechange?.();
   assertEquals(h.transport.dataOpen, false);
   assert(h.events.some((e) => e.type === "data-closed"));
+});
+
+Deno.test("binary: sendBinary sends on the channel; binary onmessage emits data-binary", async () => {
+  const h = await joinedRtcHarness();
+  const channel = h.pcs[0].channels[0];
+  channel.open();
+  const outbound = new Uint8Array([1, 2, 3]).buffer;
+  h.transport.sendBinary(outbound);
+  assertEquals(channel.sentBinary, [outbound]);
+  const inbound = new Uint8Array([4, 5]).buffer;
+  channel.receiveBinary(inbound);
+  assertEquals(
+    h.events.filter((e) => e.type === "data-binary"),
+    [{ type: "data-binary", data: inbound }],
+  );
+});
+
+Deno.test("binary: attach configures binaryType and low-water threshold", async () => {
+  const h = await joinedRtcHarness();
+  const channel = h.pcs[0].channels[0];
+  assertEquals(channel.binaryType, "arraybuffer");
+  assertEquals(
+    channel.bufferedAmountLowThreshold,
+    BUFFERED_LOW_THRESHOLD_BYTES,
+  );
+});
+
+Deno.test("binary: bufferedAmount proxies the channel; low-water listeners fire and unsubscribe", async () => {
+  const h = await joinedRtcHarness();
+  const channel = h.pcs[0].channels[0];
+  channel.open();
+  channel.bufferedAmount = 123;
+  assertEquals(h.transport.bufferedAmount, 123);
+  let fired = 0;
+  const unsub = h.transport.onBufferedAmountLow(() => fired++);
+  channel.fireBufferedAmountLow();
+  assertEquals(fired, 1);
+  unsub();
+  channel.fireBufferedAmountLow();
+  assertEquals(fired, 1);
+});
+
+Deno.test("binary: sendBinary throws when the channel is not open", async () => {
+  const h = await joinedRtcHarness();
+  assertThrows(() => h.transport.sendBinary(new Uint8Array([1]).buffer));
 });
