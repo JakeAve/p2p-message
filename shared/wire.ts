@@ -4,13 +4,39 @@ export type PubkeyFrame = { v: 1; type: "pubkey"; key: string };
 export type EncryptedFrame = { v: 1; type: "enc"; iv: string; ct: string };
 export type Frame = PubkeyFrame | EncryptedFrame;
 
+export type FileCancelReason = "sender" | "receiver" | "error";
+
+export type FileOffer = {
+  type: "file-offer";
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  chunkSize: number;
+  chunkCount: number;
+};
+
 export type Payload =
   | { type: "key-confirm"; transcriptHash: string }
   | { type: "identity"; displayName: string }
   | { type: "chat"; id?: string; content: string }
   | { type: "delivered"; id: string }
   | { type: "typing"; active: boolean }
-  | { type: "end" };
+  | { type: "end" }
+  | FileOffer
+  | { type: "file-done"; id: string; sha256: string }
+  | { type: "file-cancel"; id: string; reason: FileCancelReason }
+  | { type: "file-received"; id: string };
+
+/** File transfer framing (spec §1): binary chunks on the data channel. */
+export const CHUNK_BYTES = 16_384; // 16 KB — universally safe DC message size
+export const MAX_FILE_BYTES = 52_428_800; // 50 MB
+export const MAX_FILE_NAME_CHARS = 255;
+export const BINARY_FRAME_VERSION = 1;
+
+export function chunkCountFor(size: number): number {
+  return Math.ceil(size / CHUNK_BYTES);
+}
 
 export type WireErrorCode = "bad-json" | "bad-version" | "bad-frame";
 

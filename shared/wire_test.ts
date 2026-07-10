@@ -1,5 +1,12 @@
 import { assertEquals, assertThrows } from "@std/assert";
-import { parseFrame, WIRE_VERSION, WireError } from "./wire.ts";
+import {
+  CHUNK_BYTES,
+  chunkCountFor,
+  MAX_FILE_BYTES,
+  parseFrame,
+  WIRE_VERSION,
+  WireError,
+} from "./wire.ts";
 
 Deno.test("WIRE_VERSION is 1", () => {
   assertEquals(WIRE_VERSION, 1);
@@ -53,4 +60,12 @@ Deno.test("parseFrame throws bad-frame on missing or wrong fields", () => {
     const err = assertThrows(() => parseFrame(raw), WireError);
     assertEquals(err.code, "bad-frame");
   }
+});
+
+Deno.test("chunkCountFor: exact multiples, remainders, and the 50 MB cap", () => {
+  assertEquals(chunkCountFor(1), 1);
+  assertEquals(chunkCountFor(CHUNK_BYTES), 1);
+  assertEquals(chunkCountFor(CHUNK_BYTES + 1), 2);
+  assertEquals(chunkCountFor(3 * CHUNK_BYTES), 3);
+  assertEquals(chunkCountFor(MAX_FILE_BYTES), 3200);
 });
