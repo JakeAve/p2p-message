@@ -185,6 +185,13 @@ export class Session {
   private activeSend: FileSendJob | null = null;
   private activeReceive: FileReceiveJob | null = null;
   private sendQueue: { id: string; file: File }[] = [];
+  // A send whose chunks + file-done are all fully transmitted, but whose
+  // file-received ack has not yet arrived (or may never arrive — the ack is
+  // best-effort). activeSend is already null by this point, so without this
+  // slot nothing could ever fail this transfer: a lost ack, a late
+  // error-cancel, or a disconnect in this window would strand the sender's
+  // UI at 100%-progress forever.
+  private pendingAckId: string | null = null;
   // Guards against a race: activeSend is only assigned deep inside
   // drainSendQueue(), after an `await file.arrayBuffer()`. Without this flag,
   // two sendFile() calls issued back-to-back (before that first await
@@ -304,6 +311,20 @@ export class Session {
         type: "file-failed",
         id,
         direction: "receive",
+        reason: "cancelled",
+      });
+    }
+    if (this.pendingAckId === id) {
+      // The peer has already fully received and verified this file (it
+      // already emitted its own file-complete) — there is nothing to tell
+      // it, and a file-cancel here would be a confusing "cancel" of a
+      // transfer that, from the receiver's point of view, already
+      // succeeded. This just stops the sender from waiting on the ack.
+      this.pendingAckId = null;
+      this.emit({
+        type: "file-failed",
+        id,
+        direction: "send",
         reason: "cancelled",
       });
     }
@@ -728,10 +749,22 @@ export class Session {
             direction: "receive",
             reason: payload.reason === "error" ? "error" : "cancelled",
           });
+        } else if (this.pendingAckId === payload.id) {
+          // All chunks + file-done were already sent and awaiting ack; this
+          // late cancel (e.g. the receiver's hash check failed) is the only
+          // way the sender ever learns the transfer didn't actually land.
+          this.pendingAckId = null;
+          this.emit({
+            type: "file-failed",
+            id: payload.id,
+            direction: "send",
+            reason: payload.reason === "error" ? "error" : "cancelled",
+          });
         }
         break;
       case "file-received":
         if (this.confirmVerified) {
+          if (this.pendingAckId === payload.id) this.pendingAckId = null;
           this.emit({ type: "file-delivered", id: payload.id });
         }
         break;
@@ -839,7 +872,9 @@ export class Session {
       this.activeSend = job;
       try {
         const sent = await job.run();
-        if (!sent) {
+        if (sent) {
+          this.pendingAckId = id;
+        } else {
           this.emit({
             type: "file-failed",
             id,
@@ -879,6 +914,16 @@ export class Session {
   /** Spec §3 interruption: leaving "secure" kills every transfer at once. */
   private failAllTransfers(): void {
     this.activeSend?.stop("disconnected"); // its drain loop emits file-failed
+    if (this.pendingAckId !== null) {
+      const id = this.pendingAckId;
+      this.pendingAckId = null;
+      this.emit({
+        type: "file-failed",
+        id,
+        direction: "send",
+        reason: "disconnected",
+      });
+    }
     const queued = this.sendQueue;
     this.sendQueue = [];
     for (const q of queued) {

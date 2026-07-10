@@ -63,21 +63,10 @@ function runSession(
     onEnd: () => session.end(),
   });
   // Sender-side File handles, kept for Retry (spec §3: resend from scratch).
-  //
-  // Known gap (flagged in Task 8 review, not fixed here): entries are never
-  // pruned except by retryFile() itself, so a File handle for every send
-  // that's ever delivered or permanently failed stays referenced for the
-  // life of the session. A "delete once no longer retryable" rule was
-  // considered, but the brief's own canRetry computation below
-  // (`event.direction === "send" && sentFiles.has(event.id)`) is defined
-  // IN TERMS OF sentFiles.has(id) — it does not vary by failure `reason`.
-  // Concretely, cancelled sends ARE expected to offer Retry (see the
-  // manual-verification step), so there is no failure reason that's
-  // "send but not retryable" to key a safe delete off of; deleting here
-  // would just make canRetry false and silently disable Retry. Fixing the
-  // leak properly needs either a UI-driven signal (e.g. prune when the
-  // bubble is removed/replaced) or a deliberate change to canRetry's
-  // semantics, which is out of scope for this task.
+  // Pruned once a transfer resolves for good: on file-delivered (success),
+  // and on file-failed when canRetry is false (see that case below — the
+  // entry must survive if Retry is still offered, since retryFile() reads
+  // it later).
   const sentFiles = new Map<string, File>();
   const sendFiles = (files: File[]) => {
     for (const file of files) sendOneFile(file);
@@ -228,15 +217,19 @@ function runSession(
           : event.reason === "disconnected"
           ? "Transfer interrupted"
           : "Transfer failed";
-        chat.failAttachment(event.id, {
-          message,
-          canRetry: event.direction === "send" && sentFiles.has(event.id),
-        });
+        const canRetry = event.direction === "send" && sentFiles.has(event.id);
+        chat.failAttachment(event.id, { message, canRetry });
+        // The transfer is resolved for good now. If Retry is still on offer,
+        // retryFile() needs the File handle later, so it must stay; otherwise
+        // (received-side failures, or a send failure with no handle) there's
+        // nothing left to keep it for.
+        if (!canRetry) sentFiles.delete(event.id);
         break;
       }
       case "file-delivered": {
         const file = sentFiles.get(event.id);
         if (file) chat.completeAttachment(event.id, file);
+        sentFiles.delete(event.id);
         chat.setDelivered(event.id);
         break;
       }

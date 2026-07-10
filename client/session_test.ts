@@ -1163,3 +1163,106 @@ Deno.test("receiver interruption: grace discards the partial transfer", async ()
   pair.b.end();
   await flushAsync();
 });
+
+// --- pendingAckId: the "fully sent, ack not yet arrived" window ---
+//
+// Once FileSendJob.run() resolves true, activeSend is nulled and the sender
+// has nothing left to fail the transfer with EXCEPT this window's dedicated
+// state (pendingAckId). These tests script the peer side by hand (rather
+// than using makeSecurePair's two real linked sessions) so the test can
+// observe and act on the moment right after file-done is sent but before
+// any ack — a real second Session would race that window shut on its own by
+// auto-acking. This mirrors the manual-peer pattern already used above (see
+// "enc frames arriving before the peer pubkey" and "id-less chat").
+async function makeSecureLoneSender() {
+  const { session, transport, fragmentSecret } = makeCreator();
+  await session.start();
+  transport.emit({ type: "data-open" });
+  await flushAsync();
+  const myPubFrame = JSON.parse(
+    transport.sentData.find((s) => JSON.parse(s).type === "pubkey")!,
+  ) as { key: string };
+  const peerPair = await generateEcdhKeyPair();
+  const peerPubB64 = await exportPublicKeyRaw(peerPair.publicKey);
+  const sessionPub = await importPublicKeyRaw(myPubFrame.key);
+  const shared = await deriveSharedSecret(peerPair.privateKey, sessionPub);
+  const key = await deriveSessionKey(fragmentSecret, shared);
+  const hash = await transcriptHash(peerPubB64, myPubFrame.key);
+  const secure = waitForEvent(session, "secure");
+  transport.emit({
+    type: "data-message",
+    data: JSON.stringify({ v: 1, type: "pubkey", key: peerPubB64 }),
+  });
+  const confirmFrame = await encryptPayload(key, {
+    type: "key-confirm",
+    transcriptHash: hash,
+  });
+  transport.emit({ type: "data-message", data: JSON.stringify(confirmFrame) });
+  await secure;
+  return { session, transport, key };
+}
+
+Deno.test("pendingAckId: a late file-cancel(reason:error) after file-done fails the stranded send with reason 'error'", async () => {
+  // Simulates the receiver's finish() throwing (e.g. hash mismatch) and
+  // replying file-cancel AFTER the sender already sent every chunk +
+  // file-done (activeSend is already null by then) — without the fix, this
+  // late cancel matched neither activeSend nor activeReceive and was
+  // silently dropped, stranding the sender's bubble forever.
+  const { session, transport, key } = await makeSecureLoneSender();
+  const id = session.sendFile(new File([new Uint8Array(1_000)], "a.bin"));
+  await flushAsync(); // chunks + file-done fully sent; sender now awaits the ack
+  const failed = waitForEvent(session, "file-failed");
+  const cancelFrame = await encryptPayload(key, {
+    type: "file-cancel",
+    id,
+    reason: "error",
+  });
+  transport.emit({ type: "data-message", data: JSON.stringify(cancelFrame) });
+  assertEquals(await failed, {
+    type: "file-failed",
+    id,
+    direction: "send",
+    reason: "error",
+  });
+  session.end();
+  await flushAsync();
+});
+
+Deno.test("pendingAckId: a disconnect after file-done fails the stranded send with reason 'disconnected'", async () => {
+  const { session, transport } = await makeSecureLoneSender();
+  const id = session.sendFile(new File([new Uint8Array(1_000)], "a.bin"));
+  await flushAsync(); // chunks + file-done fully sent; sender now awaits the ack
+  const failed = waitForEvent(session, "file-failed");
+  transport.emit({ type: "peer-left", peerId: "joiner-peer" });
+  assertEquals(await failed, {
+    type: "file-failed",
+    id,
+    direction: "send",
+    reason: "disconnected",
+  });
+  session.end();
+  await flushAsync();
+});
+
+Deno.test("pendingAckId: cancelFile after file-done locally fails the send with reason 'cancelled' and sends nothing to the peer", async () => {
+  // The peer has already fully received and verified the file at this
+  // point (it already emitted its own file-complete) — cancelFile here must
+  // be purely local, not a wire message that would confuse the peer about a
+  // transfer it already finished successfully.
+  const { session, transport } = await makeSecureLoneSender();
+  const id = session.sendFile(new File([new Uint8Array(1_000)], "a.bin"));
+  await flushAsync(); // chunks + file-done fully sent; sender now awaits the ack
+  const sentBefore = transport.sentData.length;
+  const failed = waitForEvent(session, "file-failed");
+  session.cancelFile(id);
+  assertEquals(await failed, {
+    type: "file-failed",
+    id,
+    direction: "send",
+    reason: "cancelled",
+  });
+  await flushAsync();
+  assertEquals(transport.sentData.length, sentBefore); // no file-cancel (or anything else) sent
+  session.end();
+  await flushAsync();
+});
