@@ -28,6 +28,7 @@
 
 import { type BrowserContext, chromium, type Page } from "playwright";
 import { assert, assertEquals, assertMatch } from "@std/assert";
+import { Buffer } from "node:buffer";
 
 // The ?rc= recovery token is optional here — it's only present when the
 // server has ROOM_RECOVERY_SECRET configured (e.g. via a local .env loaded
@@ -428,6 +429,71 @@ Deno.test(
         .filter({ hasText: messageText })
         .first()
         .waitFor({ state: "attached", timeout: UI_TIMEOUT_MS });
+    } finally {
+      await contextA?.close();
+      await contextB?.close();
+      await browser.close();
+      await server.stop();
+    }
+  },
+);
+
+// 1x1 transparent PNG — enough for an inline <img> preview assertion.
+const TINY_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+Deno.test(
+  "attachments: image preview + save link one way, multi-chunk file back",
+  async () => {
+    const server = await startServer();
+    const browser = await chromium.launch();
+    let contextA: BrowserContext | undefined;
+    let contextB: BrowserContext | undefined;
+    try {
+      contextA = await browser.newContext();
+      const pageA = await contextA.newPage();
+      await pageA.goto(`${server.baseUrl}/`);
+      await pageA.click('[data-e2e="create"]', { timeout: UI_TIMEOUT_MS });
+      const shareLink = await readText(pageA, '[data-e2e="share-link"]');
+      contextB = await browser.newContext();
+      const pageB = await contextB.newPage();
+      await pageB.goto(shareLink);
+      await waitForStatus(pageA, "secure");
+      await waitForStatus(pageB, "secure");
+
+      // --- A sends a PNG; B gets an inline preview and a Save link ---
+      await pageA.setInputFiles('[data-e2e="file-input"]', {
+        name: "photo.png",
+        mimeType: "image/png",
+        buffer: Buffer.from(TINY_PNG_B64, "base64"),
+      });
+      await pageB.waitForSelector(
+        '[data-e2e="attachment"] img[src^="blob:"]',
+        { state: "visible", timeout: UI_TIMEOUT_MS },
+      );
+      const saveHref = await pageB
+        .locator('[data-e2e="attachment-save"][download="photo.png"]')
+        .getAttribute("href");
+      assert(saveHref?.startsWith("blob:"), "save link must be a blob URL");
+
+      // --- A's bubble reaches Delivered (receiver verified the hash) ---
+      await pageA.waitForFunction(
+        () =>
+          document.querySelector('[data-e2e="delivery-label"]')
+            ?.textContent === "Delivered",
+        undefined,
+        { timeout: UI_TIMEOUT_MS },
+      );
+
+      // --- B sends a 200 KB binary back (multi-chunk); A gets a tile ---
+      await pageB.setInputFiles('[data-e2e="file-input"]', {
+        name: "data.bin",
+        mimeType: "application/octet-stream",
+        buffer: Buffer.alloc(200_000, 7),
+      });
+      await pageA
+        .locator('[data-e2e="attachment-save"][download="data.bin"]')
+        .waitFor({ state: "visible", timeout: UI_TIMEOUT_MS });
     } finally {
       await contextA?.close();
       await contextB?.close();
