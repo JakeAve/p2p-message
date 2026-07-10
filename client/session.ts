@@ -17,6 +17,8 @@ import {
 import {
   type EncryptedFrame,
   type Frame,
+  MAX_FILE_BYTES,
+  MAX_FILE_NAME_CHARS,
   parseFrame,
   type Payload,
   WIRE_VERSION,
@@ -30,6 +32,7 @@ import {
   type TransportEvent,
   WebRTCTransport,
 } from "./webrtc-client.ts";
+import { type FileFailReason, FileSendJob } from "./file-transfer.ts";
 
 export type SessionStatus =
   | "connecting" // signaling socket + room create/join in flight
@@ -61,7 +64,35 @@ export type SessionEvent =
   | { type: "peer-identity"; displayName: string }
   | { type: "grace-countdown"; msRemaining: number } // ~1/sec while reconnecting
   | { type: "recovery-token"; token: string } // a fresh signed room-recovery capability arrived
-  | { type: "ended"; reason: EndReason };
+  | { type: "ended"; reason: EndReason }
+  | {
+    type: "file-incoming";
+    id: string;
+    name: string;
+    mime: string;
+    size: number;
+  }
+  | {
+    type: "file-progress";
+    id: string;
+    direction: "send" | "receive";
+    bytesDone: number;
+    bytesTotal: number;
+  }
+  | {
+    type: "file-complete";
+    id: string;
+    blob: Blob;
+    name: string;
+    mime: string;
+  }
+  | {
+    type: "file-failed";
+    id: string;
+    direction: "send" | "receive";
+    reason: FileFailReason;
+  }
+  | { type: "file-delivered"; id: string };
 
 export interface SessionOptions {
   role: "creator" | "joiner";
@@ -83,6 +114,16 @@ export class SendUnavailableError extends Error {
   constructor() {
     super("cannot send: the session is not secure");
     this.name = "SendUnavailableError";
+  }
+}
+
+export class FileRejectedError extends Error {
+  reason: "too-large" | "empty";
+
+  constructor(reason: "too-large" | "empty") {
+    super(`cannot send file: ${reason}`);
+    this.name = "FileRejectedError";
+    this.reason = reason;
   }
 }
 
@@ -133,6 +174,16 @@ export class Session {
   // token is lost in flight (design §3's "one race worth a cheap mitigation").
   private recoveryToken: string | undefined;
   private recoveryRetriesLeft = 0;
+
+  // File transfers (spec §3): one active per direction, senders queue FIFO.
+  private activeSend: FileSendJob | null = null;
+  private sendQueue: { id: string; file: File }[] = [];
+  // Guards against a race: activeSend is only assigned deep inside
+  // drainSendQueue(), after an `await file.arrayBuffer()`. Without this flag,
+  // two sendFile() calls issued back-to-back (before that first await
+  // settles) would both see activeSend === null and each spawn its own
+  // drainSendQueue() loop, running two "active" sends concurrently.
+  private draining = false;
 
   constructor(opts: SessionOptions, deps: SessionDeps = {}) {
     this.opts = opts;
@@ -198,6 +249,45 @@ export class Session {
     }
     this.transport.sendData(JSON.stringify(frame));
     return id;
+  }
+
+  /** Queue a file for sending. Void behavior like sendChat: refused unless
+   * secure right now. Returns the transfer id immediately; progress,
+   * failure, and delivery arrive as session events. */
+  sendFile(file: File): string {
+    if (
+      this._status !== "secure" || !this.sessionKey || !this.transport.dataOpen
+    ) {
+      throw new SendUnavailableError();
+    }
+    if (file.size === 0) throw new FileRejectedError("empty");
+    if (file.size > MAX_FILE_BYTES) throw new FileRejectedError("too-large");
+    const id = generateMessageId();
+    this.sendQueue.push({ id, file });
+    if (!this.draining) {
+      this.draining = true;
+      void this.drainSendQueue();
+    }
+    return id;
+  }
+
+  /** Cancel an active or queued file transfer (either direction). */
+  cancelFile(id: string): void {
+    if (this.activeSend?.id === id) {
+      this.activeSend.stop("cancelled");
+      this.sendFileControl({ type: "file-cancel", id, reason: "sender" });
+      return; // file-failed is emitted by the drain loop
+    }
+    const queued = this.sendQueue.findIndex((q) => q.id === id);
+    if (queued >= 0) {
+      this.sendQueue.splice(queued, 1);
+      this.emit({
+        type: "file-failed",
+        id,
+        direction: "send",
+        reason: "cancelled",
+      });
+    }
   }
 
   /** Best-effort typing signal: silently dropped unless the session is
@@ -412,6 +502,7 @@ export class Session {
   }
 
   private resetHandshakeState(): void {
+    this.failAllTransfers();
     if (this.confirmTimer !== null) {
       this.timers.clearTimeout(this.confirmTimer);
       this.confirmTimer = null;
@@ -548,6 +639,132 @@ export class Session {
           this.finish("peer-ended");
         }
         break;
+      case "file-cancel":
+        if (this.confirmVerified && this.activeSend?.id === payload.id) {
+          this.activeSend.stop(
+            payload.reason === "error" ? "error" : "cancelled",
+          );
+        }
+        break;
+      case "file-received":
+        if (this.confirmVerified) {
+          this.emit({ type: "file-delivered", id: payload.id });
+        }
+        break;
+    }
+  }
+
+  private async drainSendQueue(): Promise<void> {
+    try {
+      await this.drainSendQueueLoop();
+    } finally {
+      this.draining = false;
+    }
+  }
+
+  private async drainSendQueueLoop(): Promise<void> {
+    while (this.sendQueue.length > 0) {
+      const { id, file } = this.sendQueue.shift()!;
+      const key = this.sessionKey;
+      if (
+        this._status !== "secure" || !key || !this.transport.dataOpen
+      ) {
+        this.emit({
+          type: "file-failed",
+          id,
+          direction: "send",
+          reason: "disconnected",
+        });
+        continue;
+      }
+      let bytes: Uint8Array;
+      try {
+        bytes = new Uint8Array(await file.arrayBuffer());
+      } catch {
+        this.emit({
+          type: "file-failed",
+          id,
+          direction: "send",
+          reason: "error",
+        });
+        continue;
+      }
+      const job = new FileSendJob({
+        id,
+        key,
+        bytes,
+        name: file.name.slice(0, MAX_FILE_NAME_CHARS),
+        mime: file.type || "application/octet-stream",
+        sink: this.transport,
+        sendControl: async (p) => {
+          const k = this.sessionKey;
+          if (this._status !== "secure" || !k || !this.transport.dataOpen) {
+            throw new SendUnavailableError();
+          }
+          const frame = await encryptPayload(k, p);
+          this.transport.sendData(JSON.stringify(frame));
+        },
+        onProgress: (bytesDone, bytesTotal) =>
+          this.emit({
+            type: "file-progress",
+            id,
+            direction: "send",
+            bytesDone,
+            bytesTotal,
+          }),
+      });
+      this.activeSend = job;
+      try {
+        const sent = await job.run();
+        if (!sent) {
+          this.emit({
+            type: "file-failed",
+            id,
+            direction: "send",
+            reason: job.stopReason ?? "cancelled",
+          });
+        }
+      } catch {
+        // sendBinary/sendControl threw: the channel died mid-transfer.
+        this.emit({
+          type: "file-failed",
+          id,
+          direction: "send",
+          reason: this._status === "secure" ? "error" : "disconnected",
+        });
+      } finally {
+        this.activeSend = null;
+      }
+    }
+  }
+
+  /** Best-effort encrypted file control (cancel/received) — like typing/end. */
+  private sendFileControl(payload: Payload): void {
+    const key = this.sessionKey;
+    if (!key) return;
+    void encryptPayload(key, payload)
+      .then((frame) => {
+        if (this._status === "secure" && this.transport.dataOpen) {
+          this.transport.sendData(JSON.stringify(frame));
+        }
+      })
+      .catch(() => {
+        // best effort
+      });
+  }
+
+  /** Spec §3 interruption: leaving "secure" kills every transfer at once. */
+  private failAllTransfers(): void {
+    this.activeSend?.stop("disconnected"); // its drain loop emits file-failed
+    const queued = this.sendQueue;
+    this.sendQueue = [];
+    for (const q of queued) {
+      this.emit({
+        type: "file-failed",
+        id: q.id,
+        direction: "send",
+        reason: "disconnected",
+      });
     }
   }
 

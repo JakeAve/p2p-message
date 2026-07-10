@@ -5,10 +5,12 @@ import {
   assertMatch,
   assertNotEquals,
   assertRejects,
+  assertThrows,
 } from "@std/assert";
 import {
   DEFAULT_GRACE_MS,
   DEFAULT_INVITE_WINDOW_MS,
+  FileRejectedError,
   GRACE_TICK_MS,
   KEY_CONFIRM_TIMEOUT_MS,
   REJOIN_RETRY_MS,
@@ -902,5 +904,239 @@ Deno.test("typing payloads arriving before key-confirm are ignored, and never re
   await secured;
   assert(!events.some((e) => e.type === "peer-typing")); // still not replayed
   session.end();
+  await flushAsync();
+});
+
+Deno.test("sendFile: refuses when not secure; refuses empty and oversize files", async () => {
+  const { session } = makeCreator();
+  assertThrows(
+    () => session.sendFile(new File([new Uint8Array(8)], "a.bin")),
+    SendUnavailableError,
+  );
+  const pair = await makeSecurePair();
+  assertThrows(
+    () => pair.a.sendFile(new File([], "empty.bin")),
+    FileRejectedError,
+  );
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+// The four tests below all wait on the RECEIVING session's file-complete /
+// file-delivered / file-incoming events. Those only fire once Task 7 wires
+// file-offer / binary-frame / file-done handling into session.ts's
+// handlePayload and handleEvent — neither exists yet (confirmed: no
+// "data-binary" case in handleEvent, no "file-offer"/"file-done" case in
+// handlePayload). The brief's own note called out only the last two
+// (cancelFile / disconnect) as needing Task 7, but running the suite showed
+// the "peer sees offer..." and "two files queue FIFO..." tests time out for
+// the same reason (they also await pair.b's file-complete / file-delivered
+// via pair.a). Commented out here, per the brief's stated preference for
+// strictly green commits; enable all four in the receive-side task (Task 7).
+//
+// Deno.test("sendFile: peer sees offer, chunks, and done; sender gets progress; ack emits file-delivered", async () => {
+//   const pair = await makeSecurePair();
+//   const eventsA = collect(pair.a);
+//   const bytes = crypto.getRandomValues(new Uint8Array(20_000)); // 2 chunks
+//   const completeB = waitForEvent(pair.b, "file-complete");
+//   const deliveredA = waitForEvent(pair.a, "file-delivered");
+//   const id = pair.a.sendFile(
+//     new File([bytes], "pic.png", { type: "image/png" }),
+//   );
+//   assertEquals(id.length, 11);
+//   const complete = await completeB;
+//   assertEquals(complete.id, id);
+//   assertEquals(complete.name, "pic.png");
+//   assertEquals(complete.mime, "image/png");
+//   assertEquals(new Uint8Array(await complete.blob.arrayBuffer()), bytes);
+//   assertEquals((await deliveredA).id, id);
+//   const progress = eventsA.filter((e) => e.type === "file-progress");
+//   assert(progress.length >= 2);
+//   assertEquals(progress.at(-1), {
+//     type: "file-progress",
+//     id,
+//     direction: "send",
+//     bytesDone: 20_000,
+//     bytesTotal: 20_000,
+//   });
+//   pair.a.end();
+//   pair.b.end();
+//   await flushAsync();
+// });
+//
+// Deno.test("sendFile: two files queue FIFO and both complete in order", async () => {
+//   const pair = await makeSecurePair();
+//   const completed: string[] = [];
+//   pair.b.on((e) => {
+//     if (e.type === "file-complete") completed.push(e.id);
+//   });
+//   const id1 = pair.a.sendFile(new File([new Uint8Array(100)], "one.bin"));
+//   const id2 = pair.a.sendFile(new File([new Uint8Array(100)], "two.bin"));
+//   await waitForEvent(pair.a, "file-delivered");
+//   await flushAsync();
+//   assertEquals(completed, [id1, id2]);
+//   pair.a.end();
+//   pair.b.end();
+//   await flushAsync();
+// });
+//
+// Deno.test("cancelFile: sender cancel stops the transfer and fails it on both ends", async () => {
+//   const pair = await makeSecurePair();
+//   // Park the sender in backpressure so the transfer is mid-flight.
+//   pair.ta.bufferedAmount = 10_000_000;
+//   const failedA = waitForEvent(pair.a, "file-failed");
+//   const failedB = waitForEvent(pair.b, "file-failed");
+//   const id = pair.a.sendFile(
+//     new File([new Uint8Array(100_000)], "big.bin"),
+//   );
+//   await waitForEvent(pair.b, "file-incoming");
+//   pair.a.cancelFile(id);
+//   assertEquals(await failedA, {
+//     type: "file-failed",
+//     id,
+//     direction: "send",
+//     reason: "cancelled",
+//   });
+//   assertEquals(await failedB, {
+//     type: "file-failed",
+//     id,
+//     direction: "receive",
+//     reason: "cancelled",
+//   });
+//   pair.a.end();
+//   pair.b.end();
+//   await flushAsync();
+// });
+//
+// Deno.test("disconnect mid-transfer fails active and queued sends with 'disconnected'", async () => {
+//   const pair = await makeSecurePair();
+//   pair.ta.bufferedAmount = 10_000_000; // park the active job
+//   const failures: SessionEvent[] = [];
+//   pair.a.on((e) => {
+//     if (e.type === "file-failed") failures.push(e);
+//   });
+//   const id1 = pair.a.sendFile(new File([new Uint8Array(100_000)], "a.bin"));
+//   const id2 = pair.a.sendFile(new File([new Uint8Array(100)], "b.bin"));
+//   await waitForEvent(pair.b, "file-incoming");
+//   pair.ta.emit({ type: "peer-left", peerId: "joiner-peer" }); // grace begins
+//   await flushAsync();
+//   assertEquals(
+//     failures.map((f) => f.type === "file-failed" && [f.id, f.reason]),
+//     [[id2, "disconnected"], [id1, "disconnected"]],
+//   );
+//   pair.a.end();
+//   pair.b.end();
+//   await flushAsync();
+// });
+
+// Sender-side-only coverage for this task's actual deliverables (chunking,
+// progress, FIFO queueing, cancel, interruption) that does NOT depend on the
+// receive side above: only observes pair.a/pair.ta, never waits on anything
+// pair.b would have to emit.
+
+Deno.test("sendFile: chunks + control frames go out on the wire; progress fires on the sender", async () => {
+  const pair = await makeSecurePair();
+  await flushAsync(); // let the post-secure identity frame settle first
+  const events = collect(pair.a);
+  const encBefore = pair.ta.sentData.length;
+  const bytes = crypto.getRandomValues(new Uint8Array(20_000)); // 2 chunks
+  const id = pair.a.sendFile(
+    new File([bytes], "pic.png", { type: "image/png" }),
+  );
+  assertEquals(id.length, 11);
+  await flushAsync();
+  // file-offer + file-done are the only two new encrypted control frames.
+  assertEquals(pair.ta.sentData.length - encBefore, 2);
+  assertEquals(pair.ta.sentBinary.length, 2); // chunkCountFor(20_000)
+  const progress = events.filter((e) => e.type === "file-progress");
+  assert(progress.length >= 2);
+  assertEquals(progress.at(-1), {
+    type: "file-progress",
+    id,
+    direction: "send",
+    bytesDone: 20_000,
+    bytesTotal: 20_000,
+  });
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("sendFile: two queued files are sent strictly in order (FIFO), one active at a time", async () => {
+  const pair = await makeSecurePair();
+  const events = collect(pair.a);
+  const id1 = pair.a.sendFile(new File([new Uint8Array(100)], "one.bin"));
+  const id2 = pair.a.sendFile(new File([new Uint8Array(100)], "two.bin"));
+  assertNotEquals(id1, id2);
+  await flushAsync();
+  const progressIds = events.filter((e) => e.type === "file-progress").map((
+    e,
+  ) => e.id);
+  assertEquals(progressIds, [id1, id2]); // never interleaved
+  assertEquals(pair.ta.sentBinary.length, 2); // one 1-chunk file each
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("cancelFile: cancelling a queued (not yet active) transfer fails it immediately, untouched on the wire", async () => {
+  const pair = await makeSecurePair();
+  pair.ta.bufferedAmount = 10_000_000; // parks the first job before any chunk sends
+  const failedA = waitForEvent(pair.a, "file-failed");
+  const id1 = pair.a.sendFile(new File([new Uint8Array(100_000)], "big.bin"));
+  const id2 = pair.a.sendFile(new File([new Uint8Array(100)], "small.bin"));
+  await flushAsync(); // id1's offer goes out, then parks in backpressure; id2 stays queued
+  const sentBinaryBefore = pair.ta.sentBinary.length;
+  pair.a.cancelFile(id2);
+  assertEquals(await failedA, {
+    type: "file-failed",
+    id: id2,
+    direction: "send",
+    reason: "cancelled",
+  });
+  assertEquals(pair.ta.sentBinary.length, sentBinaryBefore); // nothing sent for it
+  pair.a.cancelFile(id1); // clean up the parked active job
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("cancelFile: cancelling the active (mid-flight) transfer fails it on the sender before any chunk sends", async () => {
+  const pair = await makeSecurePair();
+  pair.ta.bufferedAmount = 10_000_000; // parks the job in backpressure before chunk 0
+  const failedA = waitForEvent(pair.a, "file-failed");
+  const id = pair.a.sendFile(new File([new Uint8Array(100_000)], "big.bin"));
+  await flushAsync();
+  pair.a.cancelFile(id);
+  assertEquals(await failedA, {
+    type: "file-failed",
+    id,
+    direction: "send",
+    reason: "cancelled",
+  });
+  assertEquals(pair.ta.sentBinary.length, 0); // cancelled before any chunk left the wire
+  pair.a.end();
+  pair.b.end();
+  await flushAsync();
+});
+
+Deno.test("disconnect mid-transfer fails active and queued sends with 'disconnected' (queued synchronously, active on unwind)", async () => {
+  const pair = await makeSecurePair();
+  pair.ta.bufferedAmount = 10_000_000; // parks the active job in backpressure
+  const failures: SessionEvent[] = [];
+  pair.a.on((e) => {
+    if (e.type === "file-failed") failures.push(e);
+  });
+  const id1 = pair.a.sendFile(new File([new Uint8Array(100_000)], "a.bin"));
+  const id2 = pair.a.sendFile(new File([new Uint8Array(100)], "b.bin"));
+  await flushAsync(); // id1 parks on drain (offer already sent); id2 stays queued
+  pair.ta.emit({ type: "peer-left", peerId: "joiner-peer" }); // grace begins -> failAllTransfers
+  await flushAsync();
+  assertEquals(
+    failures.map((f) => f.type === "file-failed" && [f.id, f.reason]),
+    [[id2, "disconnected"], [id1, "disconnected"]],
+  );
+  pair.a.end();
   await flushAsync();
 });
