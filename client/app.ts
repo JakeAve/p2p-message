@@ -63,6 +63,21 @@ function runSession(
     onEnd: () => session.end(),
   });
   // Sender-side File handles, kept for Retry (spec §3: resend from scratch).
+  //
+  // Known gap (flagged in Task 8 review, not fixed here): entries are never
+  // pruned except by retryFile() itself, so a File handle for every send
+  // that's ever delivered or permanently failed stays referenced for the
+  // life of the session. A "delete once no longer retryable" rule was
+  // considered, but the brief's own canRetry computation below
+  // (`event.direction === "send" && sentFiles.has(event.id)`) is defined
+  // IN TERMS OF sentFiles.has(id) — it does not vary by failure `reason`.
+  // Concretely, cancelled sends ARE expected to offer Retry (see the
+  // manual-verification step), so there is no failure reason that's
+  // "send but not retryable" to key a safe delete off of; deleting here
+  // would just make canRetry false and silently disable Retry. Fixing the
+  // leak properly needs either a UI-driven signal (e.g. prune when the
+  // bubble is removed/replaced) or a deliberate change to canRetry's
+  // semantics, which is out of scope for this task.
   const sentFiles = new Map<string, File>();
   const sendFiles = (files: File[]) => {
     for (const file of files) sendOneFile(file);
@@ -190,6 +205,39 @@ function runSession(
         );
         history.replaceState(null, "", patched);
         shareView?.updateLink(patched);
+        break;
+      }
+      case "file-incoming":
+        chat.addAttachment({
+          id: event.id,
+          name: event.name,
+          size: event.size,
+          mime: event.mime,
+          direction: "received",
+        });
+        break;
+      case "file-progress":
+        chat.setAttachmentProgress(event.id, event.bytesDone, event.bytesTotal);
+        break;
+      case "file-complete":
+        chat.completeAttachment(event.id, event.blob);
+        break;
+      case "file-failed": {
+        const message = event.reason === "cancelled"
+          ? "Transfer cancelled"
+          : event.reason === "disconnected"
+          ? "Transfer interrupted"
+          : "Transfer failed";
+        chat.failAttachment(event.id, {
+          message,
+          canRetry: event.direction === "send" && sentFiles.has(event.id),
+        });
+        break;
+      }
+      case "file-delivered": {
+        const file = sentFiles.get(event.id);
+        if (file) chat.completeAttachment(event.id, file);
+        chat.setDelivered(event.id);
         break;
       }
       case "ended":
