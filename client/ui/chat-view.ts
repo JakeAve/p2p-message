@@ -514,6 +514,7 @@ export function renderChatView(
       rec.ringFill = null;
       rec.body.innerHTML = "";
       if (rec.mime.startsWith("image/")) {
+        rec.body.classList.add("attachment-body--stacked");
         const img = el("img", "attachment-preview") as HTMLImageElement;
         img.src = url;
         img.alt = rec.name;
@@ -523,11 +524,13 @@ export function renderChatView(
         });
         rec.body.append(img);
       } else if (rec.mime.startsWith("video/")) {
+        rec.body.classList.add("attachment-body--stacked");
         const video = el("video", "attachment-preview") as HTMLVideoElement;
         video.controls = true;
         video.src = url;
         rec.body.append(video);
       } else if (rec.mime.startsWith("audio/")) {
+        rec.body.classList.add("attachment-body--stacked");
         const audio = el("audio") as HTMLAudioElement;
         audio.controls = true;
         audio.src = url;

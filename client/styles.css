@@ -527,6 +527,15 @@ h1 {
   gap: 0.5rem;
 }
 
+.attachment-body--stacked {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.attachment-body--stacked audio {
+  width: 100%;
+}
+
 .progress-ring {
   flex: none;
   width: 2.25rem;
