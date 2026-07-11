@@ -63,6 +63,20 @@ const RING_RADIUS = 15;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+function makeDownloadIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("class", "download-icon");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const arrow = document.createElementNS(SVG_NS, "path");
+  arrow.setAttribute("d", "M12 3v11m0 0-3.5-3.5M12 14l3.5-3.5");
+  const tray = document.createElementNS(SVG_NS, "path");
+  tray.setAttribute("d", "M5 16v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2");
+  svg.append(arrow, tray);
+  return svg;
+}
+
 function makeProgressRing(): { svg: SVGSVGElement; fill: SVGCircleElement } {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", "0 0 36 36");
@@ -543,9 +557,10 @@ export function renderChatView(
       const sizeEl = el("div", "attachment-size");
       sizeEl.textContent = formatFileSize(rec.size);
       info.append(nameEl, sizeEl);
-      const save = el("a", "btn attachment-save") as HTMLAnchorElement;
+      const save = el("a", "attachment-download") as HTMLAnchorElement;
       save.dataset.e2e = "attachment-save";
-      save.textContent = "Save";
+      save.setAttribute("aria-label", `Download ${rec.name}`);
+      save.append(makeDownloadIcon());
       save.href = url;
       save.download = rec.name;
       tile.append(info, save);
