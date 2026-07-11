@@ -511,3 +511,73 @@ Deno.test(
     }
   },
 );
+
+Deno.test(
+  "attachments: pdf gets tile+Save only, video and audio get their preview tags",
+  async () => {
+    const pdfBytes = await Deno.readFile(
+      new URL("./fixtures/fake-bank-statement.pdf", import.meta.url),
+    );
+    const server = await startServer();
+    const browser = await chromium.launch();
+    let contextA: BrowserContext | undefined;
+    let contextB: BrowserContext | undefined;
+    try {
+      contextA = await browser.newContext();
+      const pageA = await contextA.newPage();
+      await pageA.goto(`${server.baseUrl}/`);
+      await pageA.click('[data-e2e="create"]', { timeout: UI_TIMEOUT_MS });
+      const shareLink = await readText(pageA, '[data-e2e="share-link"]');
+      contextB = await browser.newContext();
+      const pageB = await contextB.newPage();
+      await pageB.goto(shareLink);
+      await waitForStatus(pageA, "secure");
+      await waitForStatus(pageB, "secure");
+
+      // --- A sends a real PDF; B gets tile+Save, no img/video/audio tag ---
+      await pageA.setInputFiles('[data-e2e="file-input"]', {
+        name: "fake-bank-statement.pdf",
+        mimeType: "application/pdf",
+        buffer: Buffer.from(pdfBytes),
+      });
+      await pageB
+        .locator(
+          '[data-e2e="attachment-save"][download="fake-bank-statement.pdf"]',
+        )
+        .waitFor({ state: "visible", timeout: UI_TIMEOUT_MS });
+      const pdfAttachment = pageB.locator('[data-e2e="attachment"]').filter({
+        has: pageB.locator(
+          '[data-e2e="attachment-save"][download="fake-bank-statement.pdf"]',
+        ),
+      });
+      assertEquals(await pdfAttachment.locator("img, video, audio").count(), 0);
+
+      // --- B sends a "video"; A gets a <video> preview tag. Playback
+      // fidelity isn't under test — chat-view.ts branches purely on the
+      // mime prefix (chat-view.ts:540), so arbitrary bytes suffice. ---
+      await pageB.setInputFiles('[data-e2e="file-input"]', {
+        name: "clip.mp4",
+        mimeType: "video/mp4",
+        buffer: Buffer.from("not a real video, just needs a mime prefix"),
+      });
+      await pageA
+        .locator('[data-e2e="attachment"] video')
+        .waitFor({ state: "attached", timeout: UI_TIMEOUT_MS });
+
+      // --- A sends "audio"; B gets an <audio> preview tag ---
+      await pageA.setInputFiles('[data-e2e="file-input"]', {
+        name: "sound.mp3",
+        mimeType: "audio/mpeg",
+        buffer: Buffer.from("not real audio either"),
+      });
+      await pageB
+        .locator('[data-e2e="attachment"] audio')
+        .waitFor({ state: "attached", timeout: UI_TIMEOUT_MS });
+    } finally {
+      await contextA?.close();
+      await contextB?.close();
+      await browser.close();
+      await server.stop();
+    }
+  },
+);
